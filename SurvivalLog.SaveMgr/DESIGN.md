@@ -38,12 +38,13 @@ v1.4.0 候选 02 投票物料（已迁至 `assets/banners/`）作者对玩家的
 | 文件 | 写入时机 | 写入者 |
 |---|---|---|
 | `Save_<时间戳>.bytes` + `.bak` | 退主菜单（`BattleToMain`）、章节倒计时结束（`SaveCountDownEnd`）、结局、重生等大节点；**每日结算不写主档** | `SaveGame()`（0x28E3430）调用方 17 处 |
-| `Save_<名>.snap0~N.bytes` | **每日结算（日翻转）**滚动写，窗口仅 4~6 格（`GetSnapshotSlotCount` 0x28DC460） | `CaptureDaySnapshotCore`（0x28D1E30）→ `SaveGameFileCore` |
+| `Save_<名>.snap0~N.bytes` | **无尽/轮回档的每日结算**滚动写（普通档不写！），窗口 4~6 格 | `CaptureDaySnapshotCore`（0x28D1E30） |
 | `HistorySave.bytes` | 列表/全局进度变更时 | `AddHistoryEntry`/`PersistHistoryData` |
 
-**snap 与主档同构**：同一 `SaveGameFileCore`（0x28E2410）序列化路径写出的完整 `GameSaveData`，只是落点文件名不同 → **字节级复制即可成档，零解析**。
+**~~snap 与主档同构~~（静态结论，已被实机推翻）**：`.snapN` 是 `RebirthDaySnapshot` 元数据包装（`{Version,Day,SaveFileName,Child:SaveChildData}`，dump.cs:87451），**非完整档**；且"每结算写盘"本身是无尽系统行为——**普通档结算与退出均不落盘**（2026-10-31 三轮实机，见 docs/2026-10-31-注入实机实录.md）。
+→ **备份字节源=主档**；自动备份=hook 后主动 `SaveGame()` 强制持久化（游戏退出存档同款公开 API），等主档 mtime 变化后抄走（≤4s 实测）。
 
-实盘佐证（2026-10-31）：当日 snap0@11:02 / snap1@14:08 / snap2@14:46 / snap3@18:32（四次结算），主档 19:53 才写（退出）——游戏只有 4~6 天滚动快照，**超窗口永久备份是原生空缺**，即本 mod 价值。
+实盘佐证（2026-10-31）：作者无尽档当日 snap0@11:02…snap3@18:32（结算时刻）+主档 19:53（退出）；普通注入档结算/退出 mtime 均纹丝不动。
 
 ### 2.2 结算链路（自动存档锚点）
 
@@ -71,6 +72,10 @@ AddHistoryEntry(fileName, name):
 
 **自足原语**：元数据、序列化、写盘、`.bak` 全走游戏自己的手。mod 前置动作只有一个——**先把备份字节复制成 `Saves/Save_<新名>.bytes`**（文件不就位则 meta 不补、列表不显示）。顺序不能反。
 
+**实机追加两律（2026-31-31 实录）**：
+1. **Name 必须是时间戳串**（`yyyy_MM_dd_HH_mm_ss`）——列表行时间列=`ParseSaveTimeShort(child.Name)`，非时间串→行被丢弃；
+2. **身份必须重写**：字节内 `GameSaveData.FileName`(0x18) 仍指原档，不重写则玩注入档会把一切写盘路由到**原档文件**（实锤事故，已恢复）。重写走 `PeekGameSave` 反序列化→改 `FileName/Name`→`SerializeObject`+`TemporaryFile.WritFile` 写回（游戏自己的 API）；Peek 失败即删文件拒交付。
+
 ### 2.4 列表显示与加载校验（反汇编 0x2BB9980 / 0x28DABA0 实锤）
 
 显示：主菜单读档 → `Reducer_Web_MainUI.RebuildSaveList` 倒序遍历 `HistoryList`，三过滤：非 legacy + `HasProgressMetaV2` + `IsSaveFilePresent`。注入条目三者全过，且**追加在尾部=列表顶部**。`LastPlayFileName` 不被改（反汇编确认）→ 不劫持"继续游戏"。
@@ -96,8 +101,9 @@ AddHistoryEntry(fileName, name):
 | 组件 | 职责 | 挂接方式 |
 |---|---|---|
 | SettlementHook | 结算时机 + day 计数 + 间隔判断 | Harmony postfix `CaptureDaySnapshot`（逐类隔离挂载，EndlessGuard 模式） |
-| BackupStore | 字节复制/校验/滚动清理/导出 | 纯文件操作，`BepInEx/plugins-data/SaveMgr/backups/` |
-| RestoreInjector | 复制成新档名 + `AddHistoryEntry` | 主菜单时机，主线程直调 |
+| BackupStore | 字节复制/md5双读/滚动清理/导出 | 纯文件操作，`BepInEx/plugins-data/SaveMgr/backups/` |
+| BackupService | 结算→SaveGame 强制持久化→主档 mtime 等待状态机→备份 | 非阻塞 Tick 驱动，15s 超时放弃 |
+| RestoreInjector | 复制成新档名 + **身份重写** + `AddHistoryEntry`（Name=时间戳） | 主菜单时机，主线程直调；Peek 失败删文件拒交付 |
 | Ticker | 兜底日翻检测 + UI 刷新 | MonoBehaviour Update（public + 双构造器，RoleUnlock 实证模式） |
 | UI | 面板页签（ModCenter 接入）+ 热键 | ModCenter v3 页签框架 |
 
@@ -129,7 +135,7 @@ BepInEx/plugins-data/SaveMgr/
 
 1. ~~写盘同步性~~ **✅ 已实证（2026-10-31，docs/2026-10-31-锚点实证.md）**：`SaveGameFileCore` 内部 `TemporaryFile.WritFileAsync` **未等待** + 外层 BeginBatchSave/EndBatchSave 再延迟一层 → postfix 仅作时机信号，字节复制必须等 mtime 稳定 + md5 双读重试（转正为必要路径）。
 2. ~~模式 gating~~ **✅ 已实证（同上）**：自然日翻转调用点（CostTime 内 day++ → TriggerDaySettlement → CaptureRebirthDaySnapshot）**无任何模式门控**；无尽共用 CountUpTimer（紧邻驱动 EndlessManager.OnHourChanged）。唯一门控 = 手机权限"跳过每日结算"（C2S_Permissions.IsSkipDailySettlement，仅挡调用点 A，不挡自然跨日）。**边界**：快照槽位设 0 时 Core 早退、postfix 空触发 → 字节源只在 NewestSnapPath mtime ≤120s 时采用，否则跳过+trace。
-3. **snap 独立可读性实机**：复制 snap → 改新名 → `AddHistoryEntry` → 实机读档进游戏跑一天（静态结论置信度高，规则 10 要求实机）。→ Task 2 探针。
+3. ~~snap 独立可读性实机~~ **✅ 已实证并推翻前提（2026-10-31，docs/2026-10-31-注入实机实录.md）**：snap 不可独立读（元数据包装）；主档字节注入可读可玩；身份重写后注入档完全独立（原档 mtime 全程不动）。VERIFY.md 全项通过。
 
 ## 7. 风险与红线
 
@@ -166,4 +172,5 @@ SaveMgr/
 
 ## 10. 迭代维护清单
 
-- 2026-10-31 初版：可行性定案（A+B 首期，C 否决）+ B 方案静态验证全链路通过 + 仓库初始化。**功能未实现**；§6 三项实证据未做；版本号待作者定。
+- 2026-10-31 初版：可行性定案（A+B 首期，C 否决）+ B 方案静态验证全链路通过 + 仓库初始化。
+- 2026-10-31 二版（MVP 实现完成）：单测 35/35；实机验收全项通过（VERIFY.md）；静态结论四处被实机修正（snap 真相/普通档不落盘/Name 时间戳律/身份重写律，§2 已更新）；注入独立性实证。**版本号 0.0.0 待作者定**；三模式各有档实测、ModCenter 面板为后续。

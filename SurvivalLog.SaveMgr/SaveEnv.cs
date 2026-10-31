@@ -10,9 +10,20 @@ namespace SurvivalLog.SaveMgr;
 public static class SaveEnv
 {
     private static string _savesDirCache;
+    private static bool _historyEnsured;
 
     public static GameCore.HotUpdate.GameSaveManager Gsm
         => GameCore.HotUpdate.BaseSingleton<GameCore.HotUpdate.GameSaveManager>.Instance;
+
+    /// <summary>历史数据懒加载守卫：主菜单直接调 GetLastPlayFileName/GetHistoryList 会 NRE
+    /// （2026-10-31 实机实证，游戏源 GameSaveManager.cs:421）；原生 RebuildSaveList 每次都先调
+    /// EnsureHistoryV2Migrated（幂等）——照抄该防御。</summary>
+    private static void EnsureHistoryReady()
+    {
+        if (_historyEnsured) return;
+        try { Gsm?.EnsureHistoryV2Migrated(); _historyEnsured = true; }
+        catch (Exception e) { SaveMgrPlugin.Trace("EnsureHistoryReady: " + e.Message); }
+    }
 
     /// <summary>存档根目录（尾带分隔符的完整路径）。失败 → null。</summary>
     public static string SavesDir()
@@ -34,29 +45,53 @@ public static class SaveEnv
         return null;
     }
 
-    /// <summary>最近游玩的档名（GetLastPlayFileName，无扩展名）；空/异常 → null。</summary>
+    private static string _cachedName;
+
+    /// <summary>最近游玩的档名，游戏原生约定**带 .bytes 后缀**（2026-10-31 实机实证：
+    /// GetLastPlayFileName/HistoryChild.FileName/AddHistoryEntry 的 fileName 全链带后缀）。
+    /// 局内 GetLastPlayFileName 会 NRE（战时 historyData 卸载，游戏源:421）——菜单期成功值缓存，
+    /// 局内回落缓存（进局必经菜单，缓存必已填充）。</summary>
     public static string CurrentSaveName()
     {
         try
         {
             var gsm = Gsm;
-            var name = gsm == null ? null : gsm.GetLastPlayFileName();
-            return string.IsNullOrEmpty(name) ? null : name;
+            if (gsm == null) return _cachedName;
+            EnsureHistoryReady();
+            var name = gsm.GetLastPlayFileName();
+            if (!string.IsNullOrEmpty(name)) _cachedName = name;
+            return string.IsNullOrEmpty(name) ? _cachedName : name;
         }
-        catch (Exception e) { SaveMgrPlugin.Trace("CurrentSaveName: " + e.Message); return null; }
+        catch { return _cachedName; }
     }
 
-    /// <summary>该档在历史列表里的 Day（HistoryChild.Day 匹配 FileName）；无匹配/异常 → -1。</summary>
+    /// <summary>当前档基名（去掉 .bytes），供本地路径运算（snap glob / 主档路径 / 备份目录名）。</summary>
+    public static string CurrentSaveBase()
+    {
+        var n = CurrentSaveName();
+        if (n == null) return null;
+        return n.EndsWith(".bytes", System.StringComparison.OrdinalIgnoreCase) ? n[..^".bytes".Length] : n;
+    }
+
+    /// <summary>该档在历史列表里的 Day（按去后缀基名比对，兼容两种存储形态）；无匹配/异常 → -1。</summary>
     public static int CurrentDay(string saveName)
     {
         try
         {
             var gsm = Gsm;
             if (gsm == null || string.IsNullOrEmpty(saveName)) return -1;
+            EnsureHistoryReady();
+            var baseName = saveName.EndsWith(".bytes", System.StringComparison.OrdinalIgnoreCase)
+                ? saveName[..^".bytes".Length] : saveName;
             var list = gsm.GetHistoryList();
             if (list == null) return -1;
             foreach (var child in list)
-                if (child != null && child.FileName == saveName) return child.Day;
+            {
+                if (child == null || string.IsNullOrEmpty(child.FileName)) continue;
+                var f = child.FileName.EndsWith(".bytes", System.StringComparison.OrdinalIgnoreCase)
+                    ? child.FileName[..^".bytes".Length] : child.FileName;
+                if (f == baseName) return child.Day;
+            }
             return -1;
         }
         catch (Exception e) { SaveMgrPlugin.Trace("CurrentDay: " + e.Message); return -1; }

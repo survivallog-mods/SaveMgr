@@ -47,9 +47,46 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         _acc = 0;
         if (SaveMgrPlugin.Enabled != null && !SaveMgrPlugin.Enabled.Value) return;
         SaveMgrRuntime.Drain();
+        try { SaveMgrPlugin.Service?.Tick(); } catch (Exception e) { SaveMgrPlugin.Trace("svcTick: " + e.Message); }
         PollManualHotkey();
         PollRestoreHotkey();
+        PollCmdFile();
         DayWatcher.Step();
+    }
+
+    /// <summary>文件触发通道（本机调试用，等同热键）：plugins-data/SaveMgr/cmd.txt 每行一条
+    /// —— manual=手动备份 / restore=一键回档；读后即删。键盘注入对游戏不可靠（2026-10-31
+    /// SendInput 实证），此通道走文件系统与游戏无关，自动化验收靠它。</summary>
+    private static void PollCmdFile()
+    {
+        try
+        {
+            var p = System.IO.Path.Combine(BepInEx.Paths.BepInExRootPath, "plugins-data", "SaveMgr", "cmd.txt");
+            if (!System.IO.File.Exists(p)) return;
+            var cmds = System.IO.File.ReadAllLines(p);
+            try { System.IO.File.Delete(p); } catch { }
+            foreach (var raw in cmds)
+            {
+                var cmd = (raw ?? "").Trim().ToLowerInvariant();
+                if (cmd == "manual")
+                {
+                    SaveMgrPlugin.Trace("cmd: manual");
+                    var svc = SaveMgrPlugin.Service;
+                    if (svc != null) SaveMgrRuntime.Enqueue(() => svc.ManualBackup());
+                }
+                else if (cmd == "restore")
+                {
+                    SaveMgrPlugin.Trace("cmd: restore");
+                    SaveMgrRuntime.Enqueue(() =>
+                    {
+                        var r = RestoreInjector.InjectLatest();
+                        SaveMgrPlugin.Trace("restore: ok=" + r.Ok + " reason=" + r.Reason);
+                    });
+                }
+                else if (cmd.Length > 0) SaveMgrPlugin.Trace("cmd: 未知指令 " + cmd);
+            }
+        }
+        catch (Exception e) { SaveMgrPlugin.Trace("cmd: " + e.Message); }
     }
 
     private void PollManualHotkey()

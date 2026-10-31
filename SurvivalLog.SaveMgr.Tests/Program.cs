@@ -180,56 +180,77 @@ internal static class BackupServiceTests
 {
     internal static readonly System.Collections.Generic.List<string> Roots = new();
 
-    private static (BackupService svc, BackupStore store) Fixture(Func<int> interval, Func<int> day,
-        Func<string> autoSource = null)
+    private static (BackupService svc, BackupStore store, string saves, string main) Fixture(
+        Func<int> interval, Func<int> day, bool autoPersist = true, int? persistMs = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "savemgr_svc_" + Guid.NewGuid().ToString("N"));
         Roots.Add(root);
         var saves = Path.Combine(root, "Saves"); var data = Path.Combine(root, "data");
         Directory.CreateDirectory(saves); Directory.CreateDirectory(data);
-        var snap = Path.Combine(saves, "Save_t.snap0.bytes");
         var main = Path.Combine(saves, "Save_t.bytes");
-        File.WriteAllBytes(snap, new byte[] { 1, 1 });
-        File.WriteAllBytes(main, new byte[] { 2, 2, 2 });
+        File.WriteAllBytes(main, new byte[] { 1, 1 });
         var store = new BackupStore(saves, data);
+        var seq = 0;
         var svc = new BackupService(
-            store, () => "Save_t", autoSource ?? (() => snap),
-            () => File.Exists(snap) ? snap : main,
-            interval, () => 30, day, "26157732", _ => { });
-        return (svc, store);
+            store, () => "Save_t", () => main,
+            autoPersist ? (Action)(() => { seq++; WriteFresh(main, (byte)seq); }) : () => { },
+            interval, () => 30, day, "26157732", _ => { },
+            persistTimeout: persistMs.HasValue ? TimeSpan.FromMilliseconds(persistMs.Value) : TimeSpan.FromSeconds(15));
+        return (svc, store, saves, main);
+    }
+
+    private static void WriteFresh(string main, byte b)
+    {
+        File.WriteAllBytes(main, new[] { b });
+        File.SetLastWriteTime(main, DateTime.Now.AddSeconds(2));   // 越过基线 mtime
     }
 
     public static void Run(Action<bool, string> check)
     {
         try
         {
-            // 同日重复结算信号：只备一次（幂等）
-            var (svc1, st1) = Fixture(() => 1, () => 10);
+            // 结算→强制持久化→主档落盘→Tick 抄档（interval=1 每天）
+            var (svc1, st1, _, _) = Fixture(() => 1, () => 10);
             svc1.OnSettlement(10);
-            svc1.OnSettlement(10);
+            svc1.OnSettlement(10);                       // 同日重复信号：只应有一份
+            svc1.Tick(); svc1.Tick();
             check(st1.ListBackups("Save_t").Count == 1, "OnSettlement_Idempotent_SameDay");
 
             // 间隔 3：day10 备、day12 不备、day13 备
-            var (svc2, st2) = Fixture(() => 3, () => 10);
-            svc2.OnSettlement(10); svc2.OnSettlement(12); svc2.OnSettlement(13);
+            var (svc2, st2, _, _) = Fixture(() => 3, () => 10);
+            svc2.OnSettlement(10); svc2.Tick();
+            svc2.OnSettlement(12); svc2.Tick();
+            var midCount = st2.ListBackups("Save_t").Count;
+            svc2.OnSettlement(13); svc2.Tick();
             var l2 = st2.ListBackups("Save_t");
-            check(l2.Count == 2 && l2[0].Day == 10 && l2[1].Day == 13, "OnSettlement_Respects_Interval");
+            check(midCount == 1 && l2.Count == 2 && l2[0].Day == 10 && l2[1].Day == 13, "OnSettlement_Respects_Interval");
 
             // 间隔 0 = 关闭
-            var (svc3, st3) = Fixture(() => 0, () => 10);
-            svc3.OnSettlement(10); svc3.OnSettlement(11);
+            var (svc3, st3, _, _) = Fixture(() => 0, () => 10);
+            svc3.OnSettlement(10); svc3.Tick();
             check(st3.ListBackups("Save_t").Count == 0, "OnSettlement_Off_WhenIntervalZero");
 
-            // 自动路径无新鲜 snap（getter 返回 null）：跳过本次，不回退主档（防旧档标新天）
-            var (svc3b, st3b) = Fixture(() => 1, () => 10, () => null);
-            svc3b.OnSettlement(10);
-            check(st3b.ListBackups("Save_t").Count == 0, "OnSettlement_Skips_WhenNoFreshSnap");
+            // 强制持久化没落盘（mtime 未变）→ 超时放弃，零备份
+            var (svc4, st4, _, _) = Fixture(() => 1, () => 10, autoPersist: false, persistMs: 60);
+            svc4.OnSettlement(10);
+            System.Threading.Thread.Sleep(120);
+            svc4.Tick();
+            check(st4.ListBackups("Save_t").Count == 0, "OnSettlement_Skips_WhenPersistNotWritten");
 
-            // 手动：无 snap 时回退主档，Source=manual
-            var (svc4, st4) = Fixture(() => 3, () => 49);
-            var dir = svc4.ManualBackup();
-            var m = dir == null ? null : st4.ReadMeta(dir);
-            check(m != null && m.Source == "manual" && m.Day == 49, "ManualBackup_NoSnap_FallsBackToMain");
+            // 落盘晚于一次 Tick → 后续 Tick 补上（非阻塞等待）
+            var (svc5, st5, _, main5) = Fixture(() => 1, () => 10, autoPersist: false);
+            svc5.OnSettlement(10);
+            svc5.Tick();                                  // 尚未写 → 无备份
+            var before = st5.ListBackups("Save_t").Count;
+            WriteFresh(main5, 9);
+            svc5.Tick();                                  // 落盘 → 补上
+            check(before == 0 && st5.ListBackups("Save_t").Count == 1, "Tick_PicksUp_LatePersist");
+
+            // 手动：直接抄主档，Source=manual
+            var (svc6, st6, _, _) = Fixture(() => 3, () => 49);
+            var dir = svc6.ManualBackup();
+            var m = dir == null ? null : st6.ReadMeta(dir);
+            check(m != null && m.Source == "manual" && m.Day == 49, "ManualBackup_Copies_Main");
         }
         finally
         {
@@ -249,6 +270,8 @@ internal static class RestoreInjectorTests
             File.WriteAllText(Path.Combine(root, "Save_a.bytes"), "x");
             check(RestoreInjector.PathIsFree(root, "Save_b"), "PathIsFree_True_New");
             check(!RestoreInjector.PathIsFree(root, "Save_a"), "PathIsFree_False_Existing");
+            check(!RestoreInjector.PathIsFree(root, "Save_a.bytes"), "PathIsFree_False_Existing_WithExt");
+            check(RestoreInjector.PathIsFree(root, "Save_b.bytes"), "PathIsFree_True_New_WithExt");
 
             // 名字生成器恒返回已占名 → 重试 3 次后失败，且目录零写入
             var made = RestoreInjector.ResolveFreeName(root, () => "Save_a", maxTries: 3);

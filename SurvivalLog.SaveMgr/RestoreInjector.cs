@@ -8,10 +8,15 @@ namespace SurvivalLog.SaveMgr;
 /// AddHistoryEntry 注册；对 Saves/ 的唯一写入=新增文件，从不改写现有档。</summary>
 public static partial class RestoreInjector
 {
-    /// <summary>savesDir 下该档名（不含 .bytes）是否未被占用。</summary>
+    /// <summary>savesDir 下该档名是否未被占用。接受带或不带 .bytes 的名字（游戏生成器输出带后缀，
+    /// 2026-10-31 实机实证）。</summary>
     public static bool PathIsFree(string savesDir, string fileName)
     {
-        try { return !File.Exists(Path.Combine(savesDir, fileName + ".bytes")); }
+        try
+        {
+            var f = fileName.EndsWith(".bytes", StringComparison.OrdinalIgnoreCase) ? fileName : fileName + ".bytes";
+            return !File.Exists(Path.Combine(savesDir, f));
+        }
         catch { return false; }
     }
 

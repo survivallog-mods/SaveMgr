@@ -1,0 +1,15 @@
+[21:45:33] patch 挂载成功：Patch_CaptureDaySnapshot
+[21:45:33] loaded：服务+结算钩子+Ticker 接线（回档 Task 8 接入）
+[21:46:58] cmd: manual
+[21:47:00] manual: 第117天 → D117_20261031_214700（清理 0）
+[21:47:14] cmd: restore
+[21:47:16] inject: 身份重写 → Save_2026_10_31_21_47_16.bytes（Name=2026_10_31_21_47_16）
+[21:47:16] inject: AddHistoryEntry done
+[21:47:16] F10: Save_2026_10_31_21_30_10 第117天备份 → 新档 Save_2026_10_31_21_47_16.bytes（读档列表顶部）
+[21:47:16] restore: ok=True reason=Save_2026_10_31_21_47_16.bytes
+[21:49:43] hook: CaptureDaySnapshot(day=118)
+[21:49:45] auto: 第118天 → 请求游戏持久化（SaveGame）
+[21:49:45] watcher: 第118天（hook 已处理，让路）
+[21:49:47] auto: 第118天 → D118_20261031_214947（清理 0）
+[21:50:33] patch 挂载成功：Patch_CaptureDaySnapshot
+[21:50:33] loaded：服务+结算钩子+Ticker 接线（回档 Task 8 接入）

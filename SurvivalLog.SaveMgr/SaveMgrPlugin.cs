@@ -50,26 +50,18 @@ public sealed class SaveMgrPlugin : BasePlugin
     {
         var dataRoot = Path.Combine(Paths.BepInExRootPath, "plugins-data", "SaveMgr");
         return new BackupService(
-            store: new BackupStore(null, dataRoot),          // savesDir 由 getter 每次解析（游戏就绪后）
-            saveName: () => SaveEnv.CurrentSaveName(),
-            autoSource: () =>                                // 结算时刻新鲜 snap（≤120s），否则 null=跳过
+            store: new BackupStore(null, dataRoot),
+            saveName: () => SaveEnv.CurrentSaveBase(),
+            mainPath: () =>
             {
                 var dir = SaveEnv.SavesDir();
-                var name = SaveEnv.CurrentSaveName();
-                if (dir == null || name == null) return null;
-                var snap = SaveFiles.NewestSnapPath(dir, name);
-                if (snap == null) return null;
-                return (DateTime.Now - File.GetLastWriteTime(snap)).TotalSeconds <= 120 ? snap : null;
+                var name = SaveEnv.CurrentSaveBase();
+                return dir == null || name == null ? null : SaveFiles.MainSavePath(dir, name);
             },
-            manualSource: () =>                              // 手动：新鲜 snap 优先，回退主档
+            forcePersist: () =>                                 // 游戏自己的持久化 API（退出存档同款）
             {
-                var dir = SaveEnv.SavesDir();
-                var name = SaveEnv.CurrentSaveName();
-                if (dir == null || name == null) return null;
-                var snap = SaveFiles.NewestSnapPath(dir, name);
-                if (snap != null && File.Exists(snap)) return snap;
-                var main = SaveFiles.MainSavePath(dir, name);
-                return File.Exists(main) ? main : null;
+                try { SaveEnv.Gsm?.SaveGame(); }
+                catch (System.Exception e) { Trace("forcePersist: " + e.Message); }
             },
             intervalDays: () => IntervalDays.Value,
             keepPerSave: () => KeepPerSave.Value,
