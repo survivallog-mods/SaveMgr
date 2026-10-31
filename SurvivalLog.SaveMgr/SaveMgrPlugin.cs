@@ -20,9 +20,8 @@ public sealed class SaveMgrPlugin : BasePlugin
     internal static ConfigEntry<bool> Enabled;
     internal static ConfigEntry<bool> AutoBackup;
     internal static ConfigEntry<int> IntervalDays;
-    internal static ConfigEntry<int> KeepPerSave;
 
-    internal static BackupService Service;
+    internal static SavepointService Service;
 
     public override void Load()
     {
@@ -32,46 +31,38 @@ public sealed class SaveMgrPlugin : BasePlugin
         Enabled = Config.Bind("General", "Enabled", true, "总开关：false=停全部功能（已落备份保留）");
         AutoBackup = Config.Bind("AutoBackup", "AutoBackup", true, "每日结算自动备份");
         IntervalDays = Config.Bind("AutoBackup", "IntervalDays", 5, "间隔天数：0=关闭，1=每天，N=每 N 天");
-        KeepPerSave = Config.Bind("Manual", "KeepPerSave", 30,
-            new ConfigDescription("每档备份保留上限（按天数升序删最老，含手动）", new AcceptableValueRange<int>(1, 999)));
 
         Service = BuildService();
+        MenuButtons.BootScanStaging(Path.Combine(Paths.BepInExRootPath, "plugins-data", "SaveMgr", "staging"));
         // 游戏内实体按钮层（主菜单「一键回档」/局内 ESC「立即存档」）由 Ticker 驱动，见 MenuButtons
         InstallPatches();                     // 逐类隔离挂载（EndlessGuard 实证模式：坏一个不连坐）
         TickerHost.Install();
 
         Trace("loaded：服务+结算钩子+Ticker 接线（回档 Task 8 接入）");
-        Log.LogInfo("[SaveMgr] 存档管理 loaded（cfg: interval=" + IntervalDays.Value + ", keep=" + KeepPerSave.Value + "）");
+        Log.LogInfo("[SaveMgr] 存档管理 loaded（interval=" + IntervalDays.Value + "）");
     }
 
-    private static BackupService BuildService()
+    private static SavepointService BuildService()
     {
         var dataRoot = Path.Combine(Paths.BepInExRootPath, "plugins-data", "SaveMgr");
-        return new BackupService(
-            store: new BackupStore(dataRoot),
+        return new SavepointService(
+            store: new StateStore(dataRoot),
             saveName: () => SaveEnv.CurrentSaveBase(),
             mainPath: () =>
             {
                 var dir = SaveEnv.SavesDir();
                 var name = SaveEnv.CurrentSaveBase();
-                return dir == null || name == null ? null : SaveFiles.MainSavePath(dir, name);
-            },
-            forcePersist: () =>                                 // 游戏自己的持久化 API（退出存档同款）
-            {
-                try { SaveEnv.Gsm?.SaveGame(); }
-                catch (System.Exception e) { Trace("forcePersist: " + e.Message); }
+                return dir == null || name == null ? null : Path.Combine(dir, name + ".bytes");
             },
             intervalDays: () => IntervalDays.Value,
-            keepPerSave: () => KeepPerSave.Value,
             currentDay: () =>
             {
                 var name = SaveEnv.CurrentSaveName();
                 return name == null ? 0 : SaveEnv.CurrentDay(name);
             },
-            gameBuild: "26157732",
-            trace: Trace,
-            autoEnabled: () => AutoBackup.Value,
-            toMainThread: SaveMgrRuntime.Enqueue);
+            stagingDir: Path.Combine(dataRoot, "staging"),
+            onStaged: MenuButtons.EnqueueAutoSavepoint,
+            trace: Trace);
     }
 
     /// <summary>逐类隔离挂载 Harmony 补丁（2026-10-25 教训：PatchAll 整包挂载时单个 IL 错炸整个 Load）。</summary>

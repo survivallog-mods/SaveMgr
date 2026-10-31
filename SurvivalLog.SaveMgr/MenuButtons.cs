@@ -181,13 +181,50 @@ internal static class MenuButtons
     private static bool _spArmed;
     private static string _spFile;
     private static int _spTicks;
+    private static readonly System.Collections.Generic.List<(string path, int day)> _autoQueue = new();
 
-    /// <summary>存档点接力泵（Tick 每拍）：官方保存退出 → 主菜单落地（缓冲 2 拍）→
-    /// 注入主档副本为存档点 → 官方 EnterBattle 重进原档继续玩。</summary>
+    /// <summary>自动存档点入队（SavepointService.onStaged 回调；崩溃残留由 BootScanStaging 补扫）。</summary>
+    internal static void EnqueueAutoSavepoint(string stagedPath, int day)
+    {
+        lock (_autoQueue) _autoQueue.Add((stagedPath, day));
+    }
+
+    /// <summary>启动补扫：上次会话暂存未注册的存档点（崩溃/未到菜单）重新入队。</summary>
+    internal static void BootScanStaging(string stagingDir)
+    {
+        try
+        {
+            if (!System.IO.Directory.Exists(stagingDir)) return;
+            foreach (var f in System.IO.Directory.GetFiles(stagingDir, "D*.bytes"))
+            {
+                var name = System.IO.Path.GetFileNameWithoutExtension(f);
+                var day = name.Length > 1 && name[0] == 'D' && int.TryParse(name.Substring(1, name.IndexOf('_') - 1), out var d) ? d : 0;
+                EnqueueAutoSavepoint(f, day);
+            }
+        }
+        catch (System.Exception e) { SaveMgrPlugin.Trace("bootScan: " + e.Message); }
+    }
+
+    /// <summary>存档点接力泵（Tick 每拍）：
+    /// ①手动（官方保存退出）→ 主菜单落地缓冲 2 拍 → 注入主档副本 → EnterBattle 自动重进；
+    /// ②自动（结算暂存）→ 主菜单落地即静默注册（不打扰，不重进），注册后删暂存。</summary>
     private static void TickSavepoint()
     {
         try
         {
+            // ②自动队列：菜单期逐个注册
+            if (SaveEnv.AtMainMenu)
+            {
+                (string path, int day)[] batch = null;
+                lock (_autoQueue) { if (_autoQueue.Count > 0) { batch = _autoQueue.ToArray(); _autoQueue.Clear(); } }
+                if (batch != null)
+                    foreach (var (path, day) in batch)
+                    {
+                        var inj = RestoreInjector.InjectFile(path);
+                        SaveMgrPlugin.Trace("自动存档点注册" + (inj.Ok ? "成功 → " + inj.Reason : "失败：" + inj.Reason));
+                        if (inj.Ok) { try { System.IO.File.Delete(path); } catch { } SaveListPanel.RefreshCache(); }
+                    }
+            }
             if (!_spArmed) return;
             if (!SaveEnv.AtMainMenu) { _spTicks = 0; return; }   // 还没到菜单（读条中）
             if (++_spTicks < 2) return;                          // 菜单缓冲 2 拍
@@ -258,10 +295,10 @@ internal static class MenuButtons
     {
         try
         {
-            if (act == "backup")                        // 兜底（.btn-exit 不在场）：抄最近持久化
+            if (act == "backup")                        // .btn-exit 不在场（未开暂停菜单）：提示引导
             {
-                SaveMgrPlugin.Trace("按钮：立即存档（兜底=抄最近持久化主档）");
-                SaveMgrPlugin.Service?.ManualBackupStale();
+                SaveMgrPlugin.Trace("按钮：立即存档（未开暂停菜单，引导提示）");
+                Toast("CoreUI1", "请先按 ESC 打开暂停菜单，再点「立即存档」");
             }
             else if (act != null && act.StartsWith("savepoint:", System.StringComparison.Ordinal))
             {

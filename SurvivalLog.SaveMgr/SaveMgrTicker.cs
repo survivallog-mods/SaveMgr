@@ -34,7 +34,6 @@ internal sealed class SaveMgrTicker : MonoBehaviour
 {
     private float _acc;
     private KeyCode _manualKey = KeyCode.F9;   // 键名固定（cfg 极简面不暴露）
-    private KeyCode _restoreKey = KeyCode.F10;
     private bool _keyResolved;
 
     public SaveMgrTicker(IntPtr p) : base(p) { }
@@ -48,8 +47,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
             if (SaveMgrPlugin.Enabled == null || SaveMgrPlugin.Enabled.Value)
             {
                 PollManualHotkey();
-                PollRestoreHotkey();
-            }
+                    }
         }
         catch (Exception e) { SaveMgrPlugin.Trace("hotkey frame: " + e.Message); }
 
@@ -80,15 +78,6 @@ internal sealed class SaveMgrTicker : MonoBehaviour
                     SaveMgrPlugin.Trace("cmd: manual");
                     SaveMgrRuntime.Enqueue(MenuButtons.TriggerSavepoint);   // 官方「保存并退出」接力（JS 找不到按钮自动兜底 backup）
                 }
-                else if (cmd == "restore")
-                {
-                    SaveMgrPlugin.Trace("cmd: restore");
-                    SaveMgrRuntime.Enqueue(() =>
-                    {
-                        var r = RestoreInjector.InjectLatest();
-                        SaveMgrPlugin.Trace("restore: ok=" + r.Ok + " reason=" + r.Reason);
-                    });
-                }
                 else if (cmd == "tomenu")
                 {
                     SaveMgrPlugin.Trace("cmd: tomenu");
@@ -117,16 +106,6 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         catch (Exception e) { SaveMgrPlugin.Trace("hotkey: " + e.Message); }
     }
 
-    private void PollRestoreHotkey()
-    {
-        try
-        {
-            if (!Input.GetKeyDown(_restoreKey)) return;
-            SaveMgrPlugin.Trace("F10: 一键回档触发");
-            SaveMgrRuntime.Enqueue(() => RestoreInjector.InjectLatest());
-        }
-        catch (Exception e) { SaveMgrPlugin.Trace("restore hotkey: " + e.Message); }
-    }
 }
 
 internal static class TickerHost
