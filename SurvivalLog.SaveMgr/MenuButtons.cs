@@ -177,11 +177,11 @@ internal static class MenuButtons
                 Toast("CoreUI1", "存档失败：游戏未在期限内落盘（详见 SaveMgr_trace）");
                 return;
             }
-            var r = RestoreInjector.InjectFile(System.IO.Path.Combine(SaveEnv.SavesDir() ?? "", newFile));
-            if (!r.Ok)
+            if (!RestoreInjector.RewriteIdentity(newFile))
             {
-                SaveMgrPlugin.Trace("onNew: 身份重写失败 " + r.Reason);
-                Toast("CoreUI1", "存档失败：" + r.Reason);
+                SaveMgrPlugin.Trace("onNew: 身份重写失败 → 删除地雷档 " + newFile);
+                try { System.IO.File.Delete(System.IO.Path.Combine(SaveEnv.SavesDir() ?? "", newFile)); } catch { }
+                Toast("CoreUI1", "存档失败：身份重写未成（详见 SaveMgr_trace）");
                 return;
             }
             lock (_pendingReg) _pendingReg.Add(newFile);

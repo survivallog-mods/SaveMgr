@@ -88,4 +88,27 @@ public static partial class RestoreInjector
         }
         catch (System.Exception e) { SaveMgrPlugin.Trace("register: " + e.Message); return false; }
     }
+
+    /// <summary>身份重写（战时安全：纯文件+游戏序列器，无历史依赖）。fileName=Saves/ 内已有文件。
+    /// 不重写的档=身份指向原档的地雷（2026-11-01 01:22/01:26 实锤）。</summary>
+    public static bool RewriteIdentity(string fileName)
+    {
+        try
+        {
+            var gsm = SaveEnv.Gsm;
+            var savesDir = SaveEnv.SavesDir();
+            if (gsm == null || savesDir == null || string.IsNullOrEmpty(fileName)) return false;
+            var f = fileName.EndsWith(".bytes") ? fileName : fileName + ".bytes";
+            var path = Path.Combine(savesDir, f);
+            if (!File.Exists(path) || !IsTimestampName(f)) return false;
+            var gs = gsm.PeekGameSave(f);
+            if (gs == null) return false;
+            gs.FileName = f;
+            gs.Name = TimestampOf(f);
+            var serialized = GameCore.HotUpdate.MemoryPackToolsExpand.SerializeObject(gs);
+            GameCore.HotUpdate.TemporaryFile.WritFile(path, serialized);
+            return true;
+        }
+        catch (System.Exception e) { SaveMgrPlugin.Trace("rewrite: " + e.Message); return false; }
+    }
 }
