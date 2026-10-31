@@ -13,8 +13,13 @@ namespace SurvivalLog.SaveMgr;
 /// 安全：②若 Peek 失败（身份无法重写）→ 删除复制的文件并拒绝交付（未重写的注入档是原档地雷）。</summary>
 public static partial class RestoreInjector
 {
-    /// <summary>注入备份目录为游戏原生读档列表的新档。成功 (true, 新档名)；失败 (false, 原因)。</summary>
+    /// <summary>注入备份目录（save.bytes）为读档列表新档。</summary>
     public static (bool Ok, string Reason) Inject(string backupDir)
+        => InjectFile(Path.Combine(backupDir ?? "", "save.bytes"));
+
+    /// <summary>注入任意完整档字节文件为游戏原生读档列表的新档（备份目录/主档皆可）。
+    /// 仅主菜单（战时动历史数据会把卸载态 HistorySave 写空）。成功 (true, 新档名)。</summary>
+    public static (bool Ok, string Reason) InjectFile(string sourceFile)
     {
         string newFile = null;
         try
@@ -23,10 +28,9 @@ public static partial class RestoreInjector
 
             var gsm = SaveEnv.Gsm;
             var savesDir = SaveEnv.SavesDir();
-            var bytesFile = Path.Combine(backupDir ?? "", "save.bytes");
             if (gsm == null) return (false, "gsm-null");
             if (savesDir == null) return (false, "saves-dir-null");
-            if (!File.Exists(bytesFile)) return (false, "backup-missing");
+            if (!File.Exists(sourceFile)) return (false, "backup-missing");
 
             newFile = ResolveFreeName(savesDir, () => gsm.GenerateNewSaveFileName());
             if (newFile == null) return (false, "name-collision");
@@ -34,7 +38,7 @@ public static partial class RestoreInjector
             var entryName = TimestampOf(newFile);
 
             var dest = Path.Combine(savesDir, newFile);
-            File.Copy(bytesFile, dest);
+            File.Copy(sourceFile, dest);
 
             // 身份重写：不做则注入档与原档同身份（玩它会写坏原档）
             var gs = gsm.PeekGameSave(newFile);

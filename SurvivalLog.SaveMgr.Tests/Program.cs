@@ -253,24 +253,19 @@ internal static class BackupServiceTests
             svc5.Tick();                                  // 落盘 → 补上
             check(before == 0 && st5.ListBackups("Save_t").Count == 1, "Tick_PicksUp_LatePersist");
 
-            // 手动（按钮路径）：先强制持久化→Tick 抄→回调；Source=manual 且不写 lastAutoDay
+            // 手动兜底（ManualBackupStale）：直接抄最近持久化主档，不触发 SaveGame、不写 lastAutoDay
             var (svc6, st6, _, _) = Fixture(() => 3, () => 49);
-            int doneDay = -99; string doneDir = null;
-            svc6.OnManualDone += (d, x) => { doneDay = d; doneDir = x; };
-            svc6.ManualBackupNow();
-            svc6.Tick();
-            var m = doneDir == null ? null : st6.ReadMeta(doneDir);
-            check(doneDay == 49 && m != null && m.Source == "manual" && m.Day == 49
-                  && st6.ReadLastAutoDay("Save_t") == null, "ManualBackupNow_Persists_Then_Copies");
+            var dir6 = svc6.ManualBackupStale();
+            var m = dir6 == null ? null : st6.ReadMeta(dir6);
+            check(m != null && m.Source == "manual" && m.Day == 49
+                  && st6.ReadLastAutoDay("Save_t") == null, "ManualBackupStale_Copies_Main_Only");
 
-            // 手动失败路径（无持久化落盘）→ day=-1 + 原因
-            var (svc7, st7, _, _) = Fixture(() => 3, () => 49, autoPersist: false, persistMs: 60);
-            int failDay = 99; string failWhy = null;
-            svc7.OnManualDone += (d, x) => { failDay = d; failWhy = x; };
-            svc7.ManualBackupNow();
-            System.Threading.Thread.Sleep(120);
-            svc7.Tick();
-            check(failDay == -1 && failWhy != null && st7.ListBackups("Save_t").Count == 0, "ManualBackupNow_Fails_WhenPersistTimesOut");
+            // 自动路径：OnSettlement 只武装不持久化；首拍 Tick 才 SaveGame+抄（离开结算现场）
+            var (svc7, st7, _, _) = Fixture(() => 1, () => 10);
+            svc7.OnSettlement(10);
+            var armedOnly = st7.ListBackups("Save_t").Count == 0;   // 武装后未落任何备份
+            svc7.Tick();                                             // 首拍：请求持久化+落盘后抄
+            check(armedOnly && st7.ListBackups("Save_t").Count == 1, "Auto_Persist_Delayed_To_Next_Tick");
         }
         finally
         {

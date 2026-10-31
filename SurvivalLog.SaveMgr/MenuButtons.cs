@@ -70,7 +70,8 @@ internal static class MenuButtons
       b.setAttribute('data-interactive', '1');
       b.textContent = label;
       b.addEventListener('click', function () {
-        window.__smOutbox.push(label === '立即存档' ? 'backup' : 'loadsave');
+        if (label === '读取存档') { window.__smOutbox.push('loadsave'); return; }
+        window.__smSavepointClick();
       });
       list.insertBefore(b, anchor);
     });
@@ -136,6 +137,21 @@ internal static class MenuButtons
     d.body.appendChild(wrap);
   };
 
+  // 立即存档 = 点官方「保存并退出」（.btn-exit 安全点持久化+回主菜单）+ 通知 C# 菜单期接力
+  // （注入存档点+自动重进）。2026-11-01 实锤：任意时刻 Gsm.SaveGame() 会 native 崩（进档初期），
+  // 官方按钮是唯一安全的手动持久化路径。找不到按钮（菜单未开）→ C# 兜底抄最近主档。
+  window.__smSavepointClick = function () {
+    var d = docOf('OutSetting');
+    var exit = d && d.querySelector('.menu-list .btn-exit');
+    if (exit) {
+      window.__smOutbox.push('savepoint:' + (window.__smCurFile || ''));
+      fire(exit);
+      return true;
+    }
+    window.__smOutbox.push('backup');
+    return false;
+  };
+
   function install() {
     var b = docOf('OutSetting'); if (b) installEsc(b);
   }
@@ -162,12 +178,46 @@ internal static class MenuButtons
 })();
 ";
 
-    /// <summary>Ticker 2s 拍：守卫自愈（失守重发引导）→ drain outbox → 主线程执行动作。</summary>
+    private static bool _spArmed;
+    private static string _spFile;
+    private static int _spTicks;
+
+    /// <summary>存档点接力泵（Tick 每拍）：官方保存退出 → 主菜单落地（缓冲 2 拍）→
+    /// 注入主档副本为存档点 → 官方 EnterBattle 重进原档继续玩。</summary>
+    private static void TickSavepoint()
+    {
+        try
+        {
+            if (!_spArmed) return;
+            if (!SaveEnv.AtMainMenu) { _spTicks = 0; return; }   // 还没到菜单（读条中）
+            if (++_spTicks < 2) return;                          // 菜单缓冲 2 拍
+            _spArmed = false;
+            var file = _spFile;
+            _spFile = null;
+            if (string.IsNullOrEmpty(file)) { SaveMgrPlugin.Trace("存档点：原档名缺失，放弃"); return; }
+            var savesDir = SaveEnv.SavesDir();
+            var src = savesDir == null ? null : System.IO.Path.Combine(savesDir,
+                file.EndsWith(".bytes") ? file : file + ".bytes");
+            if (src == null || !System.IO.File.Exists(src)) { SaveMgrPlugin.Trace("存档点：主档缺失"); return; }
+            var r = RestoreInjector.InjectFile(src);
+            SaveMgrPlugin.Trace("存档点注入" + (r.Ok ? "成功 → " + r.Reason : "失败：" + r.Reason));
+            SaveListPanel.RefreshCache();
+            if (!r.Ok) return;
+            Toast("MainUI", "已存档 · 读档列表顶部（自动回到游戏）");
+            var ma = GameCore.HotUpdate.BaseSingleton<GameCore.HotUpdate.MainAction>.Instance;
+            var ent = ma == null ? null : ma.Entrance;
+            if (ent != null) ent.EnterBattle(file, true, false);  // 重进原档继续玩
+            else SaveMgrPlugin.Trace("存档点：Entrance 未就绪，不自动重进");
+        }
+        catch (System.Exception e) { _spArmed = false; SaveMgrPlugin.Trace("savepoint: " + e.Message); }
+    }
+
+    /// <summary>Ticker 2s 拍：存档点接力泵 → 守卫自愈 → drain outbox → 主线程执行动作。</summary>
     internal static void Tick()
     {
         try
         {
-            SaveMgrPlugin.TickPendingInjects();                     // 主菜单期：局内存档点注入官方读档列表
+            TickSavepoint();
             SaveListPanel.RefreshCache();                           // 主菜单期刷新列表快照（局内读档用；注入后再刷，新存档点即入快照）
 
             var web = GetWebView();
@@ -181,6 +231,12 @@ internal static class MenuButtons
             web.ExecuteJavaScript("window.__smDrain ? window.__smDrain() : '[]'", ok);
         }
         catch (Exception e) { SaveMgrPlugin.Trace("btnTick: " + e.Message); }
+    }
+
+    /// <summary>F9/cmd 触发：经 JS 走官方「保存并退出」（菜单未开时 JS 自动投兜底 backup）。</summary>
+    internal static void TriggerSavepoint()
+    {
+        ExecJs("window.__smSavepointClick && window.__smSavepointClick()");
     }
 
     private static void Handle(string json)
@@ -202,12 +258,18 @@ internal static class MenuButtons
     {
         try
         {
-            if (act == "backup")
+            if (act == "backup")                        // 兜底（.btn-exit 不在场）：抄最近持久化
             {
-                SaveMgrPlugin.Trace("按钮：立即存档（先持久化，抄档在后台线程）");
-                var svc = SaveMgrPlugin.Service;
-                if (svc == null) { Toast("OutSetting", "存档失败：服务未就绪"); return; }
-                svc.ManualBackupNow();                    // 完成/失败经 OnManualDone → toast
+                SaveMgrPlugin.Trace("按钮：立即存档（兜底=抄最近持久化主档）");
+                SaveMgrPlugin.Service?.ManualBackupStale();
+            }
+            else if (act != null && act.StartsWith("savepoint:", System.StringComparison.Ordinal))
+            {
+                // 官方「保存并退出」已被点击：菜单落地后注入存档点+自动重进（TickSavepoint 泵）
+                _spArmed = true;
+                _spFile = act["savepoint:".Length..];
+                _spTicks = 0;
+                SaveMgrPlugin.Trace("存档点武装（等主菜单接力）");
             }
             else if (act == "loadsave")
             {

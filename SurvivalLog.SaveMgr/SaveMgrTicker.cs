@@ -78,8 +78,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
                 if (cmd == "manual")
                 {
                     SaveMgrPlugin.Trace("cmd: manual");
-                    var svc = SaveMgrPlugin.Service;
-                    if (svc != null) SaveMgrRuntime.Enqueue(() => svc.ManualBackupNow());
+                    SaveMgrRuntime.Enqueue(MenuButtons.TriggerSavepoint);   // 官方「保存并退出」接力（JS 找不到按钮自动兜底 backup）
                 }
                 else if (cmd == "restore")
                 {
@@ -88,6 +87,17 @@ internal sealed class SaveMgrTicker : MonoBehaviour
                     {
                         var r = RestoreInjector.InjectLatest();
                         SaveMgrPlugin.Trace("restore: ok=" + r.Ok + " reason=" + r.Reason);
+                    });
+                }
+                else if (cmd == "tomenu")
+                {
+                    SaveMgrPlugin.Trace("cmd: tomenu");
+                    SaveMgrRuntime.Enqueue(() =>
+                    {
+                        var ma = GameCore.HotUpdate.BaseSingleton<GameCore.HotUpdate.MainAction>.Instance;
+                        var ent = ma == null ? null : ma.Entrance;
+                        if (ent == null) { SaveMgrPlugin.Trace("tomenu: Entrance 未就绪"); return; }
+                        ent.BattleToMain();
                     });
                 }
                 else if (cmd.Length > 0) SaveMgrPlugin.Trace("cmd: 未知指令 " + cmd);
@@ -101,10 +111,8 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         try
         {
             if (!Input.GetKeyDown(_manualKey)) return;
-            var svc = SaveMgrPlugin.Service;
-            if (svc == null) { SaveMgrPlugin.Trace("F9: service 未就绪"); return; }
-            SaveMgrPlugin.Trace("F9: 手动备份触发");
-            SaveMgrRuntime.Enqueue(() => svc.ManualBackupNow());
+            SaveMgrPlugin.Trace("F9: 手动存档");
+            SaveMgrRuntime.Enqueue(MenuButtons.TriggerSavepoint);
         }
         catch (Exception e) { SaveMgrPlugin.Trace("hotkey: " + e.Message); }
     }

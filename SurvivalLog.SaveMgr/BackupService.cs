@@ -80,32 +80,25 @@ public sealed class BackupService
         catch (System.Exception e) { _trace("auto: " + e.Message); }
     }
 
-    /// <summary>手动「立即存档」（按钮/F9/cmd 同路径）：先强制持久化当前进度，落盘后抄走。
-    /// 与 OnSettlement 同一状态机（Tick 驱动非阻塞）；完成经 OnManualDone 回调（UI toast）。</summary>
-    public void ManualBackupNow()
+    /// <summary>兜底手动备份（.btn-exit 不在场时）：直接抄最近持久化的主档（不触发 SaveGame——
+    /// 任意时刻 Gsm.SaveGame() 有 native 崩溃实锤 2026-11-01，手动持久化只走官方「保存并退出」按钮）。</summary>
+    public string ManualBackupStale()
     {
         try
         {
             var saveName = _saveName();
-            if (string.IsNullOrEmpty(saveName)) { _trace("manual: 无当前档名"); OnManualDone?.Invoke(-1, "无当前档"); return; }
-            var main = _mainPath();
-            if (string.IsNullOrEmpty(main) || !File.Exists(main)) { _trace("manual: 主档不存在"); OnManualDone?.Invoke(-1, "主档不存在"); return; }
-            _pending = new PendingAuto
-            {
-                Day = _currentDay(), Source = "manual",
-                SaveName = saveName,
-                MainPath = main,
-                Mtime0 = File.GetLastWriteTime(main),
-                DeadlineTick = System.Environment.TickCount + (int)_persistTimeout.TotalMilliseconds
-            };
-            _trace("manual: 请求游戏持久化（SaveGame）→ 落盘后抄");
-            _forcePersist?.Invoke();
+            if (string.IsNullOrEmpty(saveName)) { _trace("manual: 无当前档名"); return null; }
+            var src = _mainPath();
+            if (string.IsNullOrEmpty(src) || !File.Exists(src)) { _trace("manual: 主档不存在"); return null; }
+            var day = _currentDay();
+            var dir = _store.CreateBackup(src, saveName, day, "manual", $"手动·第{day}天", _gameBuild);
+            if (dir == null) { _trace("manual: 备份失败"); return null; }
+            var pruned = _store.Prune(saveName, _keepPerSave());
+            _trace($"manual(最近持久化): 第{day}天 → {Path.GetFileName(dir)}（清理 {pruned}）");
+            return dir;
         }
-        catch (System.Exception e) { _trace("manual: " + e.Message); OnManualDone?.Invoke(-1, e.Message); }
+        catch (System.Exception e) { _trace("manual: " + e.Message); return null; }
     }
-
-    /// <summary>手动存档完成回调：day≥0=成功（dir=备份目录）；day=-1=失败（第二参=原因）。</summary>
-    public event System.Action<int, string> OnManualDone;
 
     /// <summary>每 ticker 周期驱动：主档落盘（mtime 越过基线）即抄。非阻塞。</summary>
     public void Tick()
@@ -118,11 +111,6 @@ public sealed class BackupService
             {
                 _trace($"{p.Source}: 第{p.Day}天持久化超时未落盘，放弃（主档 mtime 未变化）");
                 _pending = null;
-                if (p.Source == "manual")
-                {
-                    try { OnManualDone?.Invoke(-1, "持久化超时"); }
-                    catch { }
-                }
                 return;
             }
             var mtime0 = p.Mtime0;
@@ -141,8 +129,6 @@ public sealed class BackupService
                 }
                 if (p.Source == "manual")
                 {
-                    try { OnManualDone?.Invoke(dir == null ? -1 : p.Day, dir ?? "备份失败"); }
-                    catch (System.Exception e) { _trace("manualDone: " + e.Message); }
                 }
             }
             void Work()                                           // 字节抄档+md5+清理：纯文件 IO

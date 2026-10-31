@@ -23,20 +23,6 @@ public sealed class SaveMgrPlugin : BasePlugin
     internal static ConfigEntry<int> KeepPerSave;
 
     internal static BackupService Service;
-    private static readonly System.Collections.Generic.List<string> _pendingInjects = new();
-
-    /// <summary>主菜单期泵：把局内「立即存档」的存档点注入官方读档列表（MenuButtons.Tick 调）。</summary>
-    internal static void TickPendingInjects()
-    {
-        if (!SaveEnv.AtMainMenu) return;
-        string[] batch;
-        lock (_pendingInjects) { if (_pendingInjects.Count == 0) return; batch = _pendingInjects.ToArray(); _pendingInjects.Clear(); }
-        foreach (var dir in batch)
-        {
-            var r = RestoreInjector.Inject(dir);
-            Trace("存档点注入" + (r.Ok ? "成功 → " + r.Reason : "失败：" + r.Reason));
-        }
-    }
 
     public override void Load()
     {
@@ -50,14 +36,6 @@ public sealed class SaveMgrPlugin : BasePlugin
             new ConfigDescription("每档备份保留上限（按天数升序删最老，含手动）", new AcceptableValueRange<int>(1, 999)));
 
         Service = BuildService();
-        Service.OnManualDone += (day, dirOrReason) =>
-        {
-            if (day < 0) { MenuButtons.Toast("OutSetting", "存档失败：" + dirOrReason); return; }
-            // 立即存档=玩家存档点：除备份外，回主菜单时自动注入官方读档列表（战时动历史数据
-            // 会把卸载态 HistorySave 写空——注入必须等主菜单，2026-11-01 实证）
-            lock (_pendingInjects) _pendingInjects.Add(dirOrReason);
-            MenuButtons.Toast("OutSetting", "已存档 · " + System.IO.Path.GetFileName(dirOrReason) + "（回主菜单后入读档列表）");
-        };
         // 游戏内实体按钮层（主菜单「一键回档」/局内 ESC「立即存档」）由 Ticker 驱动，见 MenuButtons
         InstallPatches();                     // 逐类隔离挂载（EndlessGuard 实证模式：坏一个不连坐）
         TickerHost.Install();
