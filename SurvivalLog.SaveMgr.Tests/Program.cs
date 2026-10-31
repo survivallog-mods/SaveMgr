@@ -21,6 +21,7 @@ internal static class Program
         BackupMetaTests.Run(Check);
         BackupStoreTests.Run(Check);
         BackupServiceTests.Run(Check);
+        RestoreInjectorTests.Run(Check);
         Console.WriteLine(_fail == 0 ? "ALL GREEN" : $"FAILURES={_fail}");
         return _fail;
     }
@@ -234,5 +235,31 @@ internal static class BackupServiceTests
         {
             foreach (var r in Roots) { try { Directory.Delete(r, true); } catch { } }
         }
+    }
+}
+
+internal static class RestoreInjectorTests
+{
+    public static void Run(Action<bool, string> check)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "savemgr_ri_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            File.WriteAllText(Path.Combine(root, "Save_a.bytes"), "x");
+            check(RestoreInjector.PathIsFree(root, "Save_b"), "PathIsFree_True_New");
+            check(!RestoreInjector.PathIsFree(root, "Save_a"), "PathIsFree_False_Existing");
+
+            // 名字生成器恒返回已占名 → 重试 3 次后失败，且目录零写入
+            var made = RestoreInjector.ResolveFreeName(root, () => "Save_a", maxTries: 3);
+            var wrote = Directory.GetFiles(root, "*.bytes").Length;
+            check(made == null && wrote == 1, "RetryUntilFree_Fails_After3");
+
+            // 第二次返回新名 → 成功
+            var n = 0;
+            var ok = RestoreInjector.ResolveFreeName(root, () => n++ == 0 ? "Save_a" : "Save_new", maxTries: 3);
+            check(ok == "Save_new", "RetryUntilFree_SecondTry_Wins");
+        }
+        finally { try { Directory.Delete(root, true); } catch { } }
     }
 }

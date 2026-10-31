@@ -34,6 +34,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
 {
     private float _acc;
     private KeyCode _manualKey = KeyCode.F9;
+    private KeyCode _restoreKey = KeyCode.F10;
     private bool _keyResolved;
 
     public SaveMgrTicker(IntPtr p) : base(p) { }
@@ -47,6 +48,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         if (SaveMgrPlugin.Enabled != null && !SaveMgrPlugin.Enabled.Value) return;
         SaveMgrRuntime.Drain();
         PollManualHotkey();
+        PollRestoreHotkey();
         DayWatcher.Step();
     }
 
@@ -66,6 +68,17 @@ internal sealed class SaveMgrTicker : MonoBehaviour
             SaveMgrRuntime.Enqueue(() => svc.ManualBackup());
         }
         catch (Exception e) { SaveMgrPlugin.Trace("hotkey: " + e.Message); }
+    }
+
+    private void PollRestoreHotkey()
+    {
+        try
+        {
+            if (!Input.GetKeyDown(_restoreKey)) return;
+            SaveMgrPlugin.Trace("F10: 一键回档触发");
+            SaveMgrRuntime.Enqueue(() => RestoreInjector.InjectLatest());
+        }
+        catch (Exception e) { SaveMgrPlugin.Trace("restore hotkey: " + e.Message); }
     }
 }
 
