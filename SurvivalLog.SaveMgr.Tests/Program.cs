@@ -20,6 +20,7 @@ internal static class Program
         IntervalPolicyTests.Run(Check);
         BackupMetaTests.Run(Check);
         BackupStoreTests.Run(Check);
+        BackupServiceTests.Run(Check);
         Console.WriteLine(_fail == 0 ? "ALL GREEN" : $"FAILURES={_fail}");
         return _fail;
     }
@@ -170,6 +171,68 @@ internal static class BackupStoreTests
         finally
         {
             try { Directory.Delete(root, true); } catch { }
+        }
+    }
+}
+
+internal static class BackupServiceTests
+{
+    internal static readonly System.Collections.Generic.List<string> Roots = new();
+
+    private static (BackupService svc, BackupStore store) Fixture(Func<int> interval, Func<int> day,
+        Func<string> autoSource = null)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "savemgr_svc_" + Guid.NewGuid().ToString("N"));
+        Roots.Add(root);
+        var saves = Path.Combine(root, "Saves"); var data = Path.Combine(root, "data");
+        Directory.CreateDirectory(saves); Directory.CreateDirectory(data);
+        var snap = Path.Combine(saves, "Save_t.snap0.bytes");
+        var main = Path.Combine(saves, "Save_t.bytes");
+        File.WriteAllBytes(snap, new byte[] { 1, 1 });
+        File.WriteAllBytes(main, new byte[] { 2, 2, 2 });
+        var store = new BackupStore(saves, data);
+        var svc = new BackupService(
+            store, () => "Save_t", autoSource ?? (() => snap),
+            () => File.Exists(snap) ? snap : main,
+            interval, () => 30, day, "26157732", _ => { });
+        return (svc, store);
+    }
+
+    public static void Run(Action<bool, string> check)
+    {
+        try
+        {
+            // 同日重复结算信号：只备一次（幂等）
+            var (svc1, st1) = Fixture(() => 1, () => 10);
+            svc1.OnSettlement(10);
+            svc1.OnSettlement(10);
+            check(st1.ListBackups("Save_t").Count == 1, "OnSettlement_Idempotent_SameDay");
+
+            // 间隔 3：day10 备、day12 不备、day13 备
+            var (svc2, st2) = Fixture(() => 3, () => 10);
+            svc2.OnSettlement(10); svc2.OnSettlement(12); svc2.OnSettlement(13);
+            var l2 = st2.ListBackups("Save_t");
+            check(l2.Count == 2 && l2[0].Day == 10 && l2[1].Day == 13, "OnSettlement_Respects_Interval");
+
+            // 间隔 0 = 关闭
+            var (svc3, st3) = Fixture(() => 0, () => 10);
+            svc3.OnSettlement(10); svc3.OnSettlement(11);
+            check(st3.ListBackups("Save_t").Count == 0, "OnSettlement_Off_WhenIntervalZero");
+
+            // 自动路径无新鲜 snap（getter 返回 null）：跳过本次，不回退主档（防旧档标新天）
+            var (svc3b, st3b) = Fixture(() => 1, () => 10, () => null);
+            svc3b.OnSettlement(10);
+            check(st3b.ListBackups("Save_t").Count == 0, "OnSettlement_Skips_WhenNoFreshSnap");
+
+            // 手动：无 snap 时回退主档，Source=manual
+            var (svc4, st4) = Fixture(() => 3, () => 49);
+            var dir = svc4.ManualBackup();
+            var m = dir == null ? null : st4.ReadMeta(dir);
+            check(m != null && m.Source == "manual" && m.Day == 49, "ManualBackup_NoSnap_FallsBackToMain");
+        }
+        finally
+        {
+            foreach (var r in Roots) { try { Directory.Delete(r, true); } catch { } }
         }
     }
 }

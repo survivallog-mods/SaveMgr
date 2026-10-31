@@ -18,6 +18,7 @@
     <Compile Include="../SurvivalLog.SaveMgr/BackupMeta.cs" />
     <Compile Include="../SurvivalLog.SaveMgr/BackupStore.cs" />
     <Compile Include="../SurvivalLog.SaveMgr/SaveFiles.cs" />
+    <Compile Include="../SurvivalLog.SaveMgr/BackupService.cs" />
   </ItemGroup>
 
 </Project>
