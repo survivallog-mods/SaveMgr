@@ -58,7 +58,19 @@ internal static class MenuButtons
       b.setAttribute('data-interactive', '1');
       b.textContent = label;
       b.addEventListener('click', function () {
-        window.__smOutbox.push(label === '立即存档' ? 'backup' : 'loadsave');
+        if (label === '立即存档') { window.__smOutbox.push('backup'); return; }
+        // 读取存档：先点官方「返回游戏」关暂停菜单（菜单开着会挡 BattleToMain 场景切换，
+        // 23:56 实机实证），稍等菜单收起再投递
+        try {
+          var d = docOf('OutSetting');
+          var back = d && Array.from(d.querySelectorAll('.menu-list *')).filter(function (e) {
+            return e.childElementCount === 0 && e.textContent.trim() === '返回游戏';
+          })[0];
+          if (back) ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function (ev) {
+            back.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true }));
+          });
+        } catch (e) {}
+        setTimeout(function () { window.__smOutbox.push('loadsave'); }, 400);
       });
       list.insertBefore(b, anchor);
     });
