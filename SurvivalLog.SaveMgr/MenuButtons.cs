@@ -167,7 +167,8 @@ internal static class MenuButtons
     {
         try
         {
-            SaveListPanel.RefreshCache();                         // 主菜单期刷新列表快照（局内读档用）
+            SaveMgrPlugin.TickPendingInjects();                     // 主菜单期：局内存档点注入官方读档列表
+            SaveListPanel.RefreshCache();                           // 主菜单期刷新列表快照（局内读档用；注入后再刷，新存档点即入快照）
 
             var web = GetWebView();
             if (web == null) return;
