@@ -101,7 +101,7 @@ internal static class SavepointTests
             }
             check(staged2.Count == 1, "Interval_Respected");
 
-            // 普通档不写盘 → 超时跳过零暂存
+            // 普通档不写盘 → 超时跳过零暂存（auto 无重试）
             var staged3 = new System.Collections.Generic.List<string>();
             var svc3 = new SavepointService(store, () => "Save_t", () => main,
                 () => 1, () => 10, saves, f => staged3.Add(f), _ => { },
@@ -110,6 +110,17 @@ internal static class SavepointTests
             System.Threading.Thread.Sleep(100);
             svc3.Tick();
             check(staged3.Count == 0, "Skip_When_No_Persist");
+
+            // 手动：SaveGame 前两轮被静默拒 → 第 3 轮落盘成功（重试机制）
+            var staged4 = new System.Collections.Generic.List<string>();
+            var persistCalls = 0;
+            var svc4 = new SavepointService(store, () => "Save_t", () => main,
+                () => 1, () => 10, saves, f => staged4.Add(f), _ => { },
+                waitTimeout: TimeSpan.FromMilliseconds(50),
+                persist: () => { if (++persistCalls >= 3) { File.WriteAllBytes(main, new byte[] { 7 }); File.SetLastWriteTime(main, DateTime.Now.AddSeconds(2)); } });
+            svc4.ManualSaveNow();
+            for (var k = 0; k < 8; k++) { System.Threading.Thread.Sleep(60); svc4.Tick(); }
+            check(staged4.Count == 1 && persistCalls == 3, "Manual_Retries_Until_Persist");
 
             // StateStore 往返
             store.WriteLastAutoDay("Save_x", 7);

@@ -20,6 +20,7 @@ public sealed class SavepointService
         public string MainPath;
         public DateTime Mtime0;
         public int DeadlineTick;
+        public int Retries;         // SaveGame 被世界安全检查静默拒时重试（每轮重调+再等）
     }
 
     private readonly StateStore _store;
@@ -109,6 +110,16 @@ public sealed class SavepointService
         {
             if (System.Environment.TickCount - p.DeadlineTick > 0)
             {
+                if (p.Retries < 2 && p.Source == "manual")
+                {
+                    // SaveGame 被静默拒（IsWorldSafeToPersist/进档初期）→ 重调再等一轮
+                    p.Retries++;
+                    p.Mtime0 = File.Exists(p.MainPath) ? File.GetLastWriteTime(p.MainPath) : p.Mtime0;
+                    p.DeadlineTick = System.Environment.TickCount + (int)_waitTimeout.TotalMilliseconds;
+                    _trace($"{p.Source}: 第{p.Day}天未落盘 → 重试 #{p.Retries}");
+                    _persist?.Invoke();
+                    return;
+                }
                 _trace($"{p.Source}: 第{p.Day}天持久化超时未落盘 → 放弃本次");
                 _pending = null;
                 if (p.Source == "manual") try { _onNewSavepoint?.Invoke(null); } catch { }

@@ -31,7 +31,13 @@ public sealed class SaveMgrPlugin : BasePlugin
     {
         if (System.Environment.TickCount - _battleSinceTick < 30_000)
             throw new System.InvalidOperationException("刚进入游戏，请稍候半分钟再存档");
-        SaveEnv.Gsm?.SaveGame();
+        // 复刻结算的持久化包裹（2026-11-01 01:05/01:09 实测：裸 SaveGame 只"武装延迟写"，
+        // 世界不安全时永远不冲刷；Begin→SaveGame→End(false) 与游戏结算同构 = 立即冲刷）
+        var gsm = SaveEnv.Gsm;
+        if (gsm == null) throw new System.InvalidOperationException("gsm-null");
+        gsm.BeginBatchSave();
+        try { gsm.SaveGame(); }
+        finally { gsm.EndBatchSave(false); }
     }
 
     /// <summary>战龄刷新（Ticker 每拍调）：进战斗边沿重置计时。</summary>
