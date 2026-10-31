@@ -44,7 +44,6 @@ internal static class DayWatcher
     {
         try
         {
-            if (SaveMgrPlugin.FallbackWatcher != null && !SaveMgrPlugin.FallbackWatcher.Value) return;
             var name = SaveEnv.CurrentSaveName();
             if (name == null) { _watchName = null; _watchDay = -1; return; }
             var day = SaveEnv.CurrentDay(name);

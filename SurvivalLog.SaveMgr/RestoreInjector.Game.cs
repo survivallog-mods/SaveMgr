@@ -19,8 +19,6 @@ public static partial class RestoreInjector
         string newFile = null;
         try
         {
-            if (SaveMgrPlugin.RestoreEnabled != null && !SaveMgrPlugin.RestoreEnabled.Value)
-                return (false, "restore-disabled");
             if (!SaveEnv.AtMainMenu) return (false, "not-at-main-menu");
 
             var gsm = SaveEnv.Gsm;

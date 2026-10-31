@@ -105,7 +105,7 @@ AddHistoryEntry(fileName, name):
 | BackupService | 结算→SaveGame 强制持久化→主档 mtime 等待状态机→备份 | 非阻塞 Tick 驱动，15s 超时放弃 |
 | RestoreInjector | 复制成新档名 + **身份重写** + `AddHistoryEntry`（Name=时间戳） | 主菜单时机，主线程直调；Peek 失败删文件拒交付 |
 | Ticker | 兜底日翻检测 + UI 刷新 | MonoBehaviour Update（public + 双构造器，RoleUnlock 实证模式） |
-| UI | 面板页签（ModCenter 接入）+ 热键 | ModCenter v3 页签框架 |
+| MenuButtons | 局内 HUD「立即存档/读取存档」实体按钮（读取存档=Entrance.BattleToMain+自动点官方菜单项弹官方列表） | Root MutationObserver 注入（ModCenter MenuEntryInjector 同款）；主菜单不加按钮（作者拍板） |
 
 ## 4. 备份文件布局
 
@@ -175,4 +175,5 @@ SaveMgr/
 ## 10. 迭代维护清单
 
 - 2026-10-31 初版：可行性定案（A+B 首期，C 否决）+ B 方案静态验证全链路通过 + 仓库初始化。
+- 2026-10-31 三版（作者 UX 拍板）：主菜单不加按钮；局内 HUD「立即存档/读取存档」实体按钮（读取存档=BattleToMain 接力自动弹官方存档列表，Gsm.BattleToMain 只存档不切场景→改 MainAction.Entrance.BattleToMain，实机实证）；面板/cfg 砍到 3 项；Steam Cloud 会复活本地删除的档——测试档清理必须走官方列表 ×（历史+文件+云一体）。
 - 2026-10-31 二版（MVP 实现完成）：单测 35/35；实机验收全项通过（VERIFY.md）；静态结论四处被实机修正（snap 真相/普通档不落盘/Name 时间戳律/身份重写律，§2 已更新）；注入独立性实证。**版本号 0.0.0 待作者定**；三模式各有档实测、ModCenter 面板为后续。
