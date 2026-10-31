@@ -40,6 +40,17 @@ public sealed class SaveMgrPlugin : BasePlugin
         finally { gsm.EndBatchSave(false); }
     }
 
+    /// <summary>立即存档就绪态：非战斗=可（菜单无风险）；战斗中=进档 ≥30s（防进档流程竞态崩溃）。</summary>
+    internal static bool BattleReady()
+    {
+        try
+        {
+            var inb = SaveEnv.Gsm != null && SaveEnv.Gsm.IsInBattle;
+            return !inb || System.Environment.TickCount - _battleSinceTick >= 30_000;
+        }
+        catch { return false; }
+    }
+
     /// <summary>战龄刷新（Ticker 每拍调）：进战斗边沿重置计时。</summary>
     internal static void TrackBattleAge()
     {
