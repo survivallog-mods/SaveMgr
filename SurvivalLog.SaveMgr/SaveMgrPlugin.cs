@@ -23,6 +23,7 @@ public sealed class SaveMgrPlugin : BasePlugin
     internal static ConfigEntry<string> ManualHotkey;
     internal static ConfigEntry<int> KeepPerSave;
     internal static ConfigEntry<bool> RestoreEnabled;
+    internal static ConfigEntry<bool> FallbackWatcher;
 
     internal static BackupService Service;
 
@@ -35,11 +36,13 @@ public sealed class SaveMgrPlugin : BasePlugin
         ManualHotkey = Config.Bind("Manual", "ManualHotkey", "F9", "手动备份热键（UnityEngine.KeyCode 名）");
         KeepPerSave = Config.Bind("Manual", "KeepPerSave", 30, "每档备份保留上限（超限删最老，含手动）");
         RestoreEnabled = Config.Bind("Restore", "RestoreEnabled", true, "一键回档（F10 主菜单注入最新备份）");
+        FallbackWatcher = Config.Bind("AutoBackup", "FallbackWatcher", true, "兜底日翻检测（结算补丁静默失败时的保险）");
 
         Service = BuildService();
+        InstallPatches();                     // 逐类隔离挂载（EndlessGuard 实证模式：坏一个不连坐）
         TickerHost.Install();
 
-        Trace("loaded：脚手架+服务接线（结算钩子 Task 7 接入；回档 Task 8 接入）");
+        Trace("loaded：服务+结算钩子+Ticker 接线（回档 Task 8 接入）");
         Log.LogInfo("[SaveMgr] 存档管理 loaded（cfg: interval=" + IntervalDays.Value + ", keep=" + KeepPerSave.Value + "）");
     }
 
@@ -77,6 +80,18 @@ public sealed class SaveMgrPlugin : BasePlugin
             },
             gameBuild: "26157732",
             trace: Trace);
+    }
+
+    /// <summary>逐类隔离挂载 Harmony 补丁（2026-10-25 教训：PatchAll 整包挂载时单个 IL 错炸整个 Load）。</summary>
+    private static void InstallPatches()
+    {
+        var harmony = new HarmonyLib.Harmony(Guid);
+        foreach (var t in typeof(SaveMgrPlugin).Assembly.GetTypes())
+        {
+            if (!t.IsClass || !t.IsDefined(typeof(HarmonyLib.HarmonyPatch), false)) continue;
+            try { harmony.CreateClassProcessor(t).Patch(); Trace("patch 挂载成功：" + t.Name); }
+            catch (System.Exception e) { Trace("patch 挂载失败 " + t.Name + ": " + e.Message); }
+        }
     }
 
     /// <summary>自证文件（硬规则9：不依赖 LogOutput.log）。每行带时间戳。</summary>

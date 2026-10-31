@@ -47,6 +47,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         if (SaveMgrPlugin.Enabled != null && !SaveMgrPlugin.Enabled.Value) return;
         SaveMgrRuntime.Drain();
         PollManualHotkey();
+        DayWatcher.Step();
     }
 
     private void PollManualHotkey()
