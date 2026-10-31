@@ -4,16 +4,18 @@ using System.Text.Json;
 
 namespace SurvivalLog.SaveMgr;
 
-/// <summary>存档点服务（2026-11-01 作者定案：**零隐藏备份**，所有存档点=官方读档列表条目）。
-/// 自动：结算 hook → 武装等待 → 游戏自己写主档（无尽类结算会写；普通档不写→超时跳过，
-/// **绝不自调 Gsm.SaveGame()**——00:35 native 崩溃实锤）→ 主档字节暂存 staging/ →
-/// 下次到主菜单由 MenuButtons 注册为官方存档点（注入后暂存即删）。
-/// 手动：暂停菜单「立即存档」=官方「保存并退出」接力（MenuButtons 全权处理，不经本服务）。</summary>
+/// <summary>存档点服务（2026-11-01 作者终版定案：**原地存、不退出、新增档、零隐藏副本**）。
+/// 手动「立即存档」：保护期检查（进档 <30s 拒绝——00:35 进档初期 SaveGame native 崩溃实锤）→
+/// Gsm.SaveGame() 持久化当前进度 → 等主档 mtime → 字节复制成**新档名**（身份重写走游戏 API，
+/// 原档不动，文件直接落 Saves/）→ 记 pending 注册 → toast；局内读取存档面板立即可见可选。
+/// 自动（结算）：等游戏自己的结算写盘（无尽类写主档；普通档不写→超时跳过，绝不自调 SaveGame）
+/// → 同样新档名+pending。pending 由 MenuButtons 在主菜单期统一 AddHistoryEntry 补注册。</summary>
 public sealed class SavepointService
 {
     private sealed class Pending
     {
         public int Day;
+        public string Source;      // manual | auto
         public string SaveName;
         public string MainPath;
         public DateTime Mtime0;
@@ -26,21 +28,48 @@ public sealed class SavepointService
     private readonly Func<int> _intervalDays;
     private readonly Func<int> _currentDay;
     private readonly Action<string> _trace;
-    private readonly string _stagingDir;
+    private readonly string _savesDir;
     private readonly TimeSpan _waitTimeout;
-    private readonly Action<string, int> _onStaged;   // (暂存路径, day) —— 注入队列
+    private readonly Action<string> _onNewSavepoint;  // 新档落成回调（MenuButtons：面板/toast/注册队列）
+    private readonly System.Action _persist;          // 持久化入口（插件=SaveMgrPlugin.PersistNow 带战龄保护；纯测直写）
 
     private Pending _pending;
 
     public SavepointService(StateStore store, Func<string> saveName, Func<string> mainPath,
-        Func<int> intervalDays, Func<int> currentDay, string stagingDir,
-        Action<string, int> onStaged, Action<string> trace, TimeSpan? waitTimeout = null)
+        Func<int> intervalDays, Func<int> currentDay, string savesDir,
+        Action<string> onNewSavepoint, Action<string> trace, TimeSpan? waitTimeout = null,
+        System.Action persist = null)
     {
         _store = store; _saveName = saveName; _mainPath = mainPath;
         _intervalDays = intervalDays; _currentDay = currentDay;
-        _stagingDir = stagingDir; _onStaged = onStaged;
+        _savesDir = savesDir; _onNewSavepoint = onNewSavepoint;
         _trace = trace ?? (_ => { });
         _waitTimeout = waitTimeout ?? TimeSpan.FromSeconds(15);
+        _persist = persist;
+    }
+
+    /// <summary>手动「立即存档」：原地持久化当前进度 → 新增一份档（不退出、不覆盖）。
+    /// 返回错误文案；null=已受理（完成经 _onNewSavepoint 回调）。</summary>
+    public string ManualSaveNow()
+    {
+        try
+        {
+            var saveName = _saveName();
+            if (string.IsNullOrEmpty(saveName)) return "无当前档";
+            var main = _mainPath();
+            if (string.IsNullOrEmpty(main) || !File.Exists(main)) return "主档不存在";
+            _pending = new Pending
+            {
+                Day = _currentDay(), Source = "manual",
+                SaveName = saveName, MainPath = main,
+                Mtime0 = File.GetLastWriteTime(main),
+                DeadlineTick = System.Environment.TickCount + (int)_waitTimeout.TotalMilliseconds
+            };
+            _trace("manual: 立即存档 → 请求游戏持久化（SaveGame）");
+            _persist?.Invoke();                                    // 插件侧带战龄保护（进档 <30s 拒绝）
+            return null;
+        }
+        catch (System.Exception e) { _trace("manual: " + e.Message); return e.Message; }
     }
 
     /// <summary>结算信号：间隔策略 → 武装等待游戏自己的写盘（不主动持久化）。</summary>
@@ -60,13 +89,13 @@ public sealed class SavepointService
 
             _pending = new Pending
             {
-                Day = day,
+                Day = day, Source = "auto",
                 SaveName = saveName,
                 MainPath = main,
                 Mtime0 = File.GetLastWriteTime(main),
                 DeadlineTick = System.Environment.TickCount + (int)_waitTimeout.TotalMilliseconds
             };
-            _trace($"auto: 第{day}天 → 等待游戏结算写盘（15s 内主档 mtime 变化即暂存）");
+            _trace($"auto: 第{day}天 → 等待游戏结算写盘（15s 内主档 mtime 变化即取）");
         }
         catch (System.Exception e) { _trace("auto: " + e.Message); }
     }
@@ -80,22 +109,28 @@ public sealed class SavepointService
         {
             if (System.Environment.TickCount - p.DeadlineTick > 0)
             {
-                _trace($"auto: 第{p.Day}天结算未写主档（普通档结算不落盘）→ 跳过自动存档点");
+                _trace($"{p.Source}: 第{p.Day}天持久化超时未落盘 → 放弃本次");
                 _pending = null;
+                if (p.Source == "manual") try { _onNewSavepoint?.Invoke(null); } catch { }
                 return;
             }
             if (!File.Exists(p.MainPath) || File.GetLastWriteTime(p.MainPath) <= p.Mtime0) return;
 
             _pending = null;
-            // 稳定读（md5 双读+mtime 栅栏）→ 暂存（注入在主菜单期，崩溃/未到菜单均可恢复）
+            // 稳定读（md5 双读+mtime 栅栏）→ 新档落 Saves/（身份重写在 MenuButtons 注入侧完成）
             var (bytes, _) = BackupStore.ReadStable(p.MainPath);
-            Directory.CreateDirectory(_stagingDir);
-            var staged = Path.Combine(_stagingDir, "D" + p.Day + "_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".bytes");
-            File.WriteAllBytes(staged, bytes);
-            _store.WriteLastAutoDay(p.SaveName, p.Day);
-            _trace($"auto: 第{p.Day}天已暂存 → {Path.GetFileName(staged)}（主菜单时注册为存档点）");
-            try { _onStaged?.Invoke(staged, p.Day); }
-            catch (System.Exception e) { _trace("onStaged: " + e.Message); }
+            Directory.CreateDirectory(_savesDir);
+            var newFile = "Save_" + System.DateTime.Now.ToString("yyyy_MM_dd_HH_mm_ss");
+            for (var n = 2; ; n++)
+            {
+                if (!File.Exists(Path.Combine(_savesDir, newFile + ".bytes"))) break;
+                newFile = "Save_" + System.DateTime.Now.ToString("yyyy_MM_dd_HH_mm_ss") + "_" + n;
+            }
+            File.WriteAllBytes(Path.Combine(_savesDir, newFile + ".bytes"), bytes);
+            if (p.Source == "auto") _store.WriteLastAutoDay(p.SaveName, p.Day);
+            _trace($"{p.Source}: 第{p.Day}天新档落成 → {newFile}.bytes");
+            try { _onNewSavepoint?.Invoke(newFile + ".bytes"); }
+            catch (System.Exception e) { _trace("onNew: " + e.Message); }
         }
         catch (System.Exception e) { _trace("autoTick: " + e.Message); _pending = null; }
     }

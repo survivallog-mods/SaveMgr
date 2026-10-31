@@ -22,6 +22,29 @@ public sealed class SaveMgrPlugin : BasePlugin
     internal static ConfigEntry<int> IntervalDays;
 
     internal static SavepointService Service;
+    private static int _battleSinceTick = System.Environment.TickCount;
+    private static bool _lastInBattle;
+
+    /// <summary>SaveGame 唯一入口（手动立即存档）：**带战龄保护**——进档 <30s 抛拒
+    /// （00:35 实锤：进档初期灌 SaveGame 会 native 崩；进档半分钟后多次实机安全）。</summary>
+    internal static void PersistNow()
+    {
+        if (System.Environment.TickCount - _battleSinceTick < 30_000)
+            throw new System.InvalidOperationException("刚进入游戏，请稍候半分钟再存档");
+        SaveEnv.Gsm?.SaveGame();
+    }
+
+    /// <summary>战龄刷新（Ticker 每拍调）：进战斗边沿重置计时。</summary>
+    internal static void TrackBattleAge()
+    {
+        try
+        {
+            var inb = SaveEnv.Gsm != null && SaveEnv.Gsm.IsInBattle;
+            if (inb && !_lastInBattle) _battleSinceTick = System.Environment.TickCount;
+            _lastInBattle = inb;
+        }
+        catch { }
+    }
 
     public override void Load()
     {
@@ -33,7 +56,8 @@ public sealed class SaveMgrPlugin : BasePlugin
         IntervalDays = Config.Bind("AutoBackup", "IntervalDays", 5, "间隔天数：0=关闭，1=每天，N=每 N 天");
 
         Service = BuildService();
-        MenuButtons.BootScanStaging(Path.Combine(Paths.BepInExRootPath, "plugins-data", "SaveMgr", "staging"));
+        MenuButtons.BootScanPending(Path.Combine(dataRoot2(), "pending.json"));
+
         // 游戏内实体按钮层（主菜单「一键回档」/局内 ESC「立即存档」）由 Ticker 驱动，见 MenuButtons
         InstallPatches();                     // 逐类隔离挂载（EndlessGuard 实证模式：坏一个不连坐）
         TickerHost.Install();
@@ -41,6 +65,8 @@ public sealed class SaveMgrPlugin : BasePlugin
         Trace("loaded：服务+结算钩子+Ticker 接线（回档 Task 8 接入）");
         Log.LogInfo("[SaveMgr] 存档管理 loaded（interval=" + IntervalDays.Value + "）");
     }
+
+    private static string dataRoot2() => Path.Combine(Paths.BepInExRootPath, "plugins-data", "SaveMgr");
 
     private static SavepointService BuildService()
     {
@@ -60,9 +86,10 @@ public sealed class SaveMgrPlugin : BasePlugin
                 var name = SaveEnv.CurrentSaveName();
                 return name == null ? 0 : SaveEnv.CurrentDay(name);
             },
-            stagingDir: Path.Combine(dataRoot, "staging"),
-            onStaged: MenuButtons.EnqueueAutoSavepoint,
-            trace: Trace);
+            savesDir: SaveEnv.SavesDir(),
+            onNewSavepoint: MenuButtons.OnNewSavepoint,
+            trace: Trace,
+            persist: PersistNow);
     }
 
     /// <summary>逐类隔离挂载 Harmony 补丁（2026-10-25 教训：PatchAll 整包挂载时单个 IL 错炸整个 Load）。</summary>

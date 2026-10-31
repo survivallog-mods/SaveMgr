@@ -54,6 +54,29 @@ internal static class SaveListPanel
                 });
                 rows.Add(row);
             }
+            // 融合 pending 新档（局内点立即存档后，面板立即可见——History 索引里还没有）
+            try
+            {
+                var pendingPath = System.IO.Path.Combine(
+                    BepInEx.Paths.BepInExRootPath, "plugins-data", "SaveMgr", "pending.json");
+                if (System.IO.File.Exists(pendingPath))
+                {
+                    var pend = JsonSerializer.Deserialize<string[]>(System.IO.File.ReadAllText(pendingPath)) ?? new string[0];
+                    var known = new System.Collections.Generic.HashSet<string>();
+                    for (var i = 0; i < list.Count; i++)
+                        if (list[i] != null && list[i].FileName != null) known.Add(list[i].FileName);
+                    foreach (var f in pend)
+                    {
+                        if (string.IsNullOrEmpty(f) || known.Contains(f)) continue;
+                        var name = f.EndsWith(".bytes") ? f[..^".bytes".Length] : f;
+                        rows.Insert(0, JsonSerializer.Serialize(new Row
+                        {
+                            f = f, d = -1, p = "新存档", t = name.StartsWith("Save_") ? name["Save_".Length..] : name
+                        }));
+                    }
+                }
+            }
+            catch { }
             if (rows.Count == 0) return null;
             return "[" + string.Join(",", rows) + "]";
         }

@@ -65,4 +65,27 @@ public static partial class RestoreInjector
         if (n.EndsWith(".bytes", System.StringComparison.OrdinalIgnoreCase)) n = n[..^".bytes".Length];
         return n;
     }
+
+    /// <summary>把已落盘的新档补注册进官方读档列表（主菜单期；pending 泵调用）。
+    /// 已在列表/文件缺失 → false 跳过；注册成功 → true。</summary>
+    public static bool Register(string fileName)
+    {
+        try
+        {
+            var gsm = SaveEnv.Gsm;
+            var savesDir = SaveEnv.SavesDir();
+            if (gsm == null || savesDir == null) return false;
+            var f = fileName ?? "";
+            if (!f.EndsWith(".bytes")) f += ".bytes";
+            if (!File.Exists(Path.Combine(savesDir, f))) return false;
+            var list = gsm.GetHistoryList();
+            if (list != null)
+                foreach (var c in list)
+                    if (c != null && c.FileName == f) return false;      // 已注册
+            if (!IsTimestampName(f)) return false;
+            gsm.AddHistoryEntry(f, TimestampOf(f));
+            return true;
+        }
+        catch (System.Exception e) { SaveMgrPlugin.Trace("register: " + e.Message); return false; }
+    }
 }

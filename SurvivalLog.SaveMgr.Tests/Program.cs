@@ -66,21 +66,23 @@ internal static class SavepointTests
             var store = new StateStore(data);
             var staged = new System.Collections.Generic.List<string>();
             var svc = new SavepointService(store, () => "Save_t", () => main,
-                () => 1, () => 10, Path.Combine(data, "staging"),
-                (p, d) => staged.Add(p), _ => { },
-                waitTimeout: TimeSpan.FromSeconds(15));
+                () => 1, () => 10, saves,
+                f => staged.Add(f), _ => { },
+                waitTimeout: TimeSpan.FromSeconds(15),
+                persist: () => { });
 
-            // 结算只武装；主档未写 → 无暂存
+            // 结算只武装；主档未写 → 无新档
             svc.OnSettlement(10);
             svc.Tick();
             check(staged.Count == 0, "Settlement_Arms_Without_Staging");
 
-            // 游戏写盘（mtime 越基线）→ 暂存 + lastAutoDay + 队列回调
+            // 游戏写盘（mtime 越基线）→ Saves/ 新档 + lastAutoDay + 回调
             File.WriteAllBytes(main, new byte[] { 2, 2, 2 });
             File.SetLastWriteTime(main, DateTime.Now.AddSeconds(2));
             svc.Tick();
-            check(staged.Count == 1 && File.ReadAllBytes(staged[0]).Length == 3
-                  && store.ReadLastAutoDay("Save_t") == 10, "Staged_On_MainWrite");
+            check(staged.Count == 1 && staged[0].StartsWith("Save_") && staged[0].EndsWith(".bytes")
+                  && File.Exists(Path.Combine(saves, staged[0]))
+                  && store.ReadLastAutoDay("Save_t") == 10, "NewSave_On_MainWrite");
 
             // 同日重复结算：幂等
             svc.OnSettlement(10); svc.Tick();
@@ -89,8 +91,7 @@ internal static class SavepointTests
             // 间隔 3：day11/12 不备，day13 备
             var staged2 = new System.Collections.Generic.List<string>();
             var svc2 = new SavepointService(store, () => "Save_t", () => main,
-                () => 3, () => 10, Path.Combine(data, "staging"),
-                (p, d) => staged2.Add(p), _ => { });
+                () => 3, () => 10, saves, f => staged2.Add(f), _ => { });
             foreach (var day in new[] { 11, 12, 13 })
             {
                 svc2.OnSettlement(day);
@@ -103,8 +104,7 @@ internal static class SavepointTests
             // 普通档不写盘 → 超时跳过零暂存
             var staged3 = new System.Collections.Generic.List<string>();
             var svc3 = new SavepointService(store, () => "Save_t", () => main,
-                () => 1, () => 10, Path.Combine(data, "staging"),
-                (p, d) => staged3.Add(p), _ => { },
+                () => 1, () => 10, saves, f => staged3.Add(f), _ => { },
                 waitTimeout: TimeSpan.FromMilliseconds(50));
             svc3.OnSettlement(20);
             System.Threading.Thread.Sleep(100);

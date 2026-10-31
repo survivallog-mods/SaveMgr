@@ -56,7 +56,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         _acc = 0;
         if (SaveMgrPlugin.Enabled != null && !SaveMgrPlugin.Enabled.Value) return;
         SaveMgrRuntime.Drain();
-        try { SaveMgrPlugin.Service?.Tick(); } catch (Exception e) { SaveMgrPlugin.Trace("svcTick: " + e.Message); }
+        try { SaveMgrPlugin.TrackBattleAge(); SaveMgrPlugin.Service?.Tick(); } catch (Exception e) { SaveMgrPlugin.Trace("svcTick: " + e.Message); }
         PollCmdFile();
         MenuButtons.Tick();
         DayWatcher.Step();
@@ -76,7 +76,11 @@ internal sealed class SaveMgrTicker : MonoBehaviour
                 if (cmd == "manual")
                 {
                     SaveMgrPlugin.Trace("cmd: manual");
-                    SaveMgrRuntime.Enqueue(MenuButtons.TriggerSavepoint);   // 官方「保存并退出」接力（JS 找不到按钮自动兜底 backup）
+                    SaveMgrRuntime.Enqueue(() =>
+                    {
+                        var err = SaveMgrPlugin.Service?.ManualSaveNow();
+                        if (err != null) MenuButtons.Toast("CoreUI1", "存档失败：" + err);
+                    });
                 }
                 else if (cmd == "tomenu")
                 {
@@ -100,8 +104,12 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         try
         {
             if (!Input.GetKeyDown(_manualKey)) return;
-            SaveMgrPlugin.Trace("F9: 手动存档");
-            SaveMgrRuntime.Enqueue(MenuButtons.TriggerSavepoint);
+            SaveMgrPlugin.Trace("F9: 手动存档（原地新档）");
+            SaveMgrRuntime.Enqueue(() =>
+            {
+                var err = SaveMgrPlugin.Service?.ManualSaveNow();
+                if (err != null) MenuButtons.Toast("CoreUI1", "存档失败：" + err);
+            });
         }
         catch (Exception e) { SaveMgrPlugin.Trace("hotkey: " + e.Message); }
     }
