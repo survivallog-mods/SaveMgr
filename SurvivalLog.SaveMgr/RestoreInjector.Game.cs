@@ -32,6 +32,7 @@ public static partial class RestoreInjector
 
             newFile = ResolveFreeName(savesDir, () => gsm.GenerateNewSaveFileName());
             if (newFile == null) return (false, "name-collision");
+            if (!IsTimestampName(newFile)) return (false, "name-not-timestamp");
             var entryName = TimestampOf(newFile);
 
             var dest = Path.Combine(savesDir, newFile);
@@ -57,7 +58,8 @@ public static partial class RestoreInjector
         }
         catch (System.Exception e)
         {
-            if (newFile != null) { try { File.Delete(Path.Combine(SaveEnv.SavesDir() ?? "", newFile)); } catch { } }
+            var dir = SaveEnv.SavesDir();                          // null 时跳过删除（避免 CWD 相对路径误删）
+            if (newFile != null && dir != null) { try { File.Delete(Path.Combine(dir, newFile)); } catch { } }
             SaveMgrPlugin.Trace("inject: " + e.Message);
             return (false, e.Message);
         }

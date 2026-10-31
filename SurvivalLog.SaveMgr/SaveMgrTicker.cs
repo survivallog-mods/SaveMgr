@@ -42,14 +42,23 @@ internal sealed class SaveMgrTicker : MonoBehaviour
 
     public void Update()
     {
+        // 热键每帧轮询（GetKeyDown 是帧边沿信号，栅在 2s 节拍上会几乎必然漏按——终审 Critical）
+        try
+        {
+            if (SaveMgrPlugin.Enabled == null || SaveMgrPlugin.Enabled.Value)
+            {
+                PollManualHotkey();
+                PollRestoreHotkey();
+            }
+        }
+        catch (Exception e) { SaveMgrPlugin.Trace("hotkey frame: " + e.Message); }
+
         _acc += Time.unscaledDeltaTime;
         if (_acc < 2f) return;
         _acc = 0;
         if (SaveMgrPlugin.Enabled != null && !SaveMgrPlugin.Enabled.Value) return;
         SaveMgrRuntime.Drain();
         try { SaveMgrPlugin.Service?.Tick(); } catch (Exception e) { SaveMgrPlugin.Trace("svcTick: " + e.Message); }
-        PollManualHotkey();
-        PollRestoreHotkey();
         PollCmdFile();
         DayWatcher.Step();
     }
@@ -61,6 +70,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
     {
         try
         {
+            if (SaveMgrPlugin.CmdChannel != null && !SaveMgrPlugin.CmdChannel.Value) return;
             var p = System.IO.Path.Combine(BepInEx.Paths.BepInExRootPath, "plugins-data", "SaveMgr", "cmd.txt");
             if (!System.IO.File.Exists(p)) return;
             var cmds = System.IO.File.ReadAllLines(p);

@@ -15,12 +15,10 @@ public sealed class BackupStore
     private const string MetaFileName = "meta.json";
     private const string StateFileName = "state.json";
 
-    private readonly string _savesDir;
     private readonly string _dataRoot;
 
-    public BackupStore(string savesDir, string dataRoot)
+    public BackupStore(string dataRoot)
     {
-        _savesDir = savesDir;
         _dataRoot = dataRoot;
     }
 
@@ -49,7 +47,7 @@ public sealed class BackupStore
             catch
             {
                 if (attempt >= 3) return null;
-                Thread.Sleep(500);
+                Thread.Sleep(50);   // 主线程上运行：短睡（终审：原 500ms 会卡游戏 ~1s）
             }
         }
     }
@@ -137,10 +135,9 @@ public sealed class BackupStore
             var p = Path.Combine(_dataRoot, StateFileName);
             var tmp = p + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(st));
-            if (File.Exists(p)) File.Delete(p);
-            File.Move(tmp, p);
+            File.Move(tmp, p, overwrite: true);                   // 原子覆盖（Delete→Move 有丢态窗口）
         }
-        catch { }
+        catch (System.Exception e) { System.Console.Error.Write(e.Message); }
     }
 
     // ---- internals ----
@@ -157,13 +154,18 @@ public sealed class BackupStore
         catch { return new System.Collections.Generic.Dictionary<string, int>(); }
     }
 
-    private (byte[] bytes, string md5) ReadStable(string path)
+    /// <summary>稳定读：md5 双读 + **mtime 栅栏**（读前/读后 mtime 变化=仍在写，拒收——终审：
+    /// 双读都落在异步写的间隙时 md5 相等也会收残缺内容）。midReadHook 仅供单测注入。</summary>
+    public static (byte[] bytes, string md5) ReadStable(string path, System.Action midReadHook = null)
     {
+        var m0 = File.GetLastWriteTimeUtc(path);
         var a = File.ReadAllBytes(path);
         var h1 = System.Convert.ToHexString(MD5.HashData(a)).ToLower();
+        midReadHook?.Invoke();
         var b = File.ReadAllBytes(path);
         var h2 = System.Convert.ToHexString(MD5.HashData(b)).ToLower();
-        if (h1 != h2) throw new IOException("source unstable: " + path);
+        var m1 = File.GetLastWriteTimeUtc(path);
+        if (h1 != h2 || m0 != m1) throw new IOException("source unstable: " + path);
         return (a, h1);
     }
 

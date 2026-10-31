@@ -15,15 +15,17 @@ public sealed class BackupService
     private sealed class PendingAuto
     {
         public int Day;
+        public string SaveName;      // 武装时刻捕获（Tick 不再重读——终审：防结算窗口切档串档）
         public string MainPath;
         public DateTime Mtime0;
-        public DateTime Deadline;
+        public int DeadlineTick;     // Environment.TickCount（墙钟受校时/DST 干扰）
     }
 
     private readonly BackupStore _store;
     private readonly Func<string> _saveName;
     private readonly Func<string> _mainPath;
     private readonly Action _forcePersist;
+    private readonly Func<bool> _autoEnabled;
     private readonly Func<int> _intervalDays;
     private readonly Func<int> _keepPerSave;
     private readonly Func<int> _currentDay;
@@ -35,21 +37,25 @@ public sealed class BackupService
 
     public BackupService(BackupStore store, Func<string> saveName, Func<string> mainPath,
         Action forcePersist, Func<int> intervalDays, Func<int> keepPerSave, Func<int> currentDay,
-        string gameBuild, Action<string> trace, TimeSpan? persistTimeout = null)
+        string gameBuild, Action<string> trace, TimeSpan? persistTimeout = null, Func<bool> autoEnabled = null)
     {
         _store = store; _saveName = saveName; _mainPath = mainPath; _forcePersist = forcePersist;
+        _autoEnabled = autoEnabled;
         _intervalDays = intervalDays; _keepPerSave = keepPerSave; _currentDay = currentDay;
         _gameBuild = gameBuild; _trace = trace ?? (_ => { });
         _persistTimeout = persistTimeout ?? TimeSpan.FromSeconds(15);
     }
 
-    /// <summary>结算信号（主线程）：判间隔后武装持久化等待。幂等/间隔由 IntervalPolicy 把关。</summary>
+    /// <summary>结算信号（主线程）：AutoBackup 扼点（hook/兜底 watcher 两条路都过这里）→
+    /// 判间隔 → 武装持久化等待。同日二次信号在首次未完成前直接让路（防重置基线漏一天）。</summary>
     public void OnSettlement(int day)
     {
         try
         {
+            if (_autoEnabled != null && !_autoEnabled()) return;   // cfg AutoBackup=false 唯一扼点
             var saveName = _saveName();
             if (string.IsNullOrEmpty(saveName)) { _trace("auto: 无当前档名，跳过"); return; }
+            if (_pending != null && _pending.Day == day) return;   // 同日已武装未完成：让路
             var last = _store.ReadLastAutoDay(saveName);
             if (!IntervalPolicy.ShouldBackup(day, last, _intervalDays())) return;
 
@@ -59,9 +65,10 @@ public sealed class BackupService
             _pending = new PendingAuto
             {
                 Day = day,
+                SaveName = saveName,
                 MainPath = main,
                 Mtime0 = File.GetLastWriteTime(main),
-                Deadline = DateTime.Now + _persistTimeout
+                DeadlineTick = System.Environment.TickCount + (int)_persistTimeout.TotalMilliseconds
             };
             _trace($"auto: 第{day}天 → 请求游戏持久化（SaveGame）");
             _forcePersist?.Invoke();
@@ -76,16 +83,16 @@ public sealed class BackupService
         if (p == null) return;
         try
         {
-            if (DateTime.Now > p.Deadline)
+            if (System.Environment.TickCount - p.DeadlineTick > 0)
             {
                 _trace($"auto: 第{p.Day}天持久化超时未落盘，放弃（主档 mtime 未变化）");
                 _pending = null;
                 return;
             }
-            if (!File.Exists(p.MainPath) || File.GetLastWriteTime(p.MainPath) <= p.Mtime0) return;
+            var mtime0 = p.Mtime0;
+            if (!File.Exists(p.MainPath) || File.GetLastWriteTime(p.MainPath) <= mtime0) return;
 
-            var saveName = _saveName();
-            if (string.IsNullOrEmpty(saveName)) { _pending = null; return; }
+            var saveName = p.SaveName;                            // 武装时刻捕获，防切档串档
             var dir = _store.CreateBackup(p.MainPath, saveName, p.Day, "auto", $"第{p.Day}天", _gameBuild);
             _pending = null;
             if (dir == null) { _trace($"auto: 第{p.Day}天备份失败（源锁/写受阻）"); return; }

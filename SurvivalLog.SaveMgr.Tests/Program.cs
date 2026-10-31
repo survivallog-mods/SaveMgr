@@ -96,7 +96,7 @@ internal static class BackupStoreTests
             var data = Path.Combine(root, "data");
             var src = Path.Combine(saves, "Save_x.snap0.bytes");
             File.WriteAllBytes(src, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 });
-            var store = new BackupStore(saves, data);
+            var store = new BackupStore(data);
             var dir = store.CreateBackup(src, "Save_x", 49, "auto", "第49天", "26157732");
             var bytesOk = dir != null && File.Exists(Path.Combine(dir, "save.bytes"))
                           && File.ReadAllBytes(Path.Combine(dir, "save.bytes")).Length == 10;
@@ -137,7 +137,7 @@ internal static class BackupStoreTests
 
             // —— state 持久化往返 ——
             store.WriteLastAutoDay("Save_y", 45);
-            var fresh = new BackupStore(saves, data);
+            var fresh = new BackupStore(data);
             check(fresh.ReadLastAutoDay("Save_y") == 45 && fresh.ReadLastAutoDay("Save_nope") == null,
                 "State_RoundTrip");
 
@@ -181,7 +181,7 @@ internal static class BackupServiceTests
     internal static readonly System.Collections.Generic.List<string> Roots = new();
 
     private static (BackupService svc, BackupStore store, string saves, string main) Fixture(
-        Func<int> interval, Func<int> day, bool autoPersist = true, int? persistMs = null)
+        Func<int> interval, Func<int> day, bool autoPersist = true, int? persistMs = null, bool autoEnabled = true)
     {
         var root = Path.Combine(Path.GetTempPath(), "savemgr_svc_" + Guid.NewGuid().ToString("N"));
         Roots.Add(root);
@@ -189,13 +189,14 @@ internal static class BackupServiceTests
         Directory.CreateDirectory(saves); Directory.CreateDirectory(data);
         var main = Path.Combine(saves, "Save_t.bytes");
         File.WriteAllBytes(main, new byte[] { 1, 1 });
-        var store = new BackupStore(saves, data);
+        var store = new BackupStore(data);
         var seq = 0;
         var svc = new BackupService(
             store, () => "Save_t", () => main,
             autoPersist ? (Action)(() => { seq++; WriteFresh(main, (byte)seq); }) : () => { },
             interval, () => 30, day, "26157732", _ => { },
-            persistTimeout: persistMs.HasValue ? TimeSpan.FromMilliseconds(persistMs.Value) : TimeSpan.FromSeconds(15));
+            persistTimeout: persistMs.HasValue ? TimeSpan.FromMilliseconds(persistMs.Value) : TimeSpan.FromSeconds(15),
+            autoEnabled: () => autoEnabled);
         return (svc, store, saves, main);
     }
 
@@ -229,6 +230,11 @@ internal static class BackupServiceTests
             var (svc3, st3, _, _) = Fixture(() => 0, () => 10);
             svc3.OnSettlement(10); svc3.Tick();
             check(st3.ListBackups("Save_t").Count == 0, "OnSettlement_Off_WhenIntervalZero");
+
+            // cfg AutoBackup=false 扼点（hook/兜底两条路都进 OnSettlement，这里统一拦）
+            var (svc3c, st3c, _, _) = Fixture(() => 1, () => 10, autoEnabled: false);
+            svc3c.OnSettlement(10); svc3c.Tick();
+            check(st3c.ListBackups("Save_t").Count == 0, "OnSettlement_Off_WhenAutoBackupDisabled");
 
             // 强制持久化没落盘（mtime 未变）→ 超时放弃，零备份
             var (svc4, st4, _, _) = Fixture(() => 1, () => 10, autoPersist: false, persistMs: 60);
@@ -282,6 +288,31 @@ internal static class RestoreInjectorTests
             var n = 0;
             var ok = RestoreInjector.ResolveFreeName(root, () => n++ == 0 ? "Save_a" : "Save_new", maxTries: 3);
             check(ok == "Save_new", "RetryUntilFree_SecondTry_Wins");
+
+            // 孤儿 .bak 占用也算不空闲（会被 LoadWithBackupFallback 配对旧字节）
+            File.WriteAllText(Path.Combine(root, "Save_c.bytes.bak"), "old");
+            check(!RestoreInjector.PathIsFree(root, "Save_c"), "PathIsFree_False_WhenOnlyBakExists");
+
+            // Name 时间戳律校验
+            check(RestoreInjector.IsTimestampName("Save_2026_10_31_21_15_55.bytes"), "IsTimestampName_True_Valid");
+            check(RestoreInjector.IsTimestampName("Save_2026_10_31_21_15_55"), "IsTimestampName_True_NoExt");
+            check(!RestoreInjector.IsTimestampName("Save_2026_10_31_21_15_55_2.bytes"), "IsTimestampName_False_Suffixed");
+            check(!RestoreInjector.IsTimestampName("探针注入"), "IsTimestampName_False_NotTimestamp");
+
+            // ReadStable mtime 栅栏：读取中途文件被改写+mtime 翻新 → 抛 IOException
+            var src = Path.Combine(root, "writable.bytes");
+            File.WriteAllBytes(src, new byte[] { 1, 2, 3 });
+            var fenceThrown = false;
+            try
+            {
+                BackupStore.ReadStable(src, () =>
+                {
+                    File.WriteAllBytes(src, new byte[] { 9, 9, 9, 9 });
+                    File.SetLastWriteTimeUtc(src, DateTime.UtcNow.AddSeconds(3));
+                });
+            }
+            catch (System.IO.IOException) { fenceThrown = true; }
+            check(fenceThrown, "ReadStable_Fence_Rejects_MidWriteChange");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
     }

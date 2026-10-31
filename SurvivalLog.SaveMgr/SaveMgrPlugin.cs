@@ -24,6 +24,7 @@ public sealed class SaveMgrPlugin : BasePlugin
     internal static ConfigEntry<int> KeepPerSave;
     internal static ConfigEntry<bool> RestoreEnabled;
     internal static ConfigEntry<bool> FallbackWatcher;
+    internal static ConfigEntry<bool> CmdChannel;
 
     internal static BackupService Service;
 
@@ -34,9 +35,11 @@ public sealed class SaveMgrPlugin : BasePlugin
         AutoBackup = Config.Bind("AutoBackup", "AutoBackup", true, "每日结算自动备份");
         IntervalDays = Config.Bind("AutoBackup", "IntervalDays", 3, "间隔天数：0=关闭，1=每天，N=每 N 天");
         ManualHotkey = Config.Bind("Manual", "ManualHotkey", "F9", "手动备份热键（UnityEngine.KeyCode 名）");
-        KeepPerSave = Config.Bind("Manual", "KeepPerSave", 30, "每档备份保留上限（超限删最老，含手动）");
+        KeepPerSave = Config.Bind("Manual", "KeepPerSave", 30, "每档备份保留上限（按天数升序删最老，含手动）",
+            new ConfigAcceptableValueRange<int>(1, 999));
         RestoreEnabled = Config.Bind("Restore", "RestoreEnabled", true, "一键回档（F10 主菜单注入最新备份）");
         FallbackWatcher = Config.Bind("AutoBackup", "FallbackWatcher", true, "兜底日翻检测（结算补丁静默失败时的保险）");
+        CmdChannel = Config.Bind("Debug", "CmdChannel", true, "文件触发通道 plugins-data/SaveMgr/cmd.txt（manual/restore，本机自动化；关闭即禁）");
 
         Service = BuildService();
         InstallPatches();                     // 逐类隔离挂载（EndlessGuard 实证模式：坏一个不连坐）
@@ -50,7 +53,7 @@ public sealed class SaveMgrPlugin : BasePlugin
     {
         var dataRoot = Path.Combine(Paths.BepInExRootPath, "plugins-data", "SaveMgr");
         return new BackupService(
-            store: new BackupStore(null, dataRoot),
+            store: new BackupStore(dataRoot),
             saveName: () => SaveEnv.CurrentSaveBase(),
             mainPath: () =>
             {
@@ -71,7 +74,8 @@ public sealed class SaveMgrPlugin : BasePlugin
                 return name == null ? 0 : SaveEnv.CurrentDay(name);
             },
             gameBuild: "26157732",
-            trace: Trace);
+            trace: Trace,
+            autoEnabled: () => AutoBackup.Value);
     }
 
     /// <summary>逐类隔离挂载 Harmony 补丁（2026-10-25 教训：PatchAll 整包挂载时单个 IL 错炸整个 Load）。</summary>
