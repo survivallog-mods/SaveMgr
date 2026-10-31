@@ -127,9 +127,9 @@ BepInEx/plugins-data/SaveMgr/
 
 ## 6. 开工前实证清单（规则 12：不猜，实锤前不写实现）
 
-1. **写盘同步性**：`GameSaveManager` 有 `batchSaveDepth/deferredSaveFrame` 字段，存盘可能延迟合并到后续帧。若 postfix `CaptureDaySnapshot` 返回时 snap 未落盘 → 改为 Ticker 等 mtime 变化再抄。反汇编 `CaptureDaySnapshotCore` 确认。
-2. **模式 gating**：`CaptureRebirthDaySnapshot` 是否受模式/`RebirthSnapshotSlots=0` 限制（休闲/普通/无尽三模式 + `Ac_EndlessSettlement` 独立流）。若 gated → 换锚点 `TriggerDaySettlement` postfix 或纯 Ticker。
-3. **snap 独立可读性实机**：复制 snap → 改新名 → `AddHistoryEntry` → 实机读档进游戏跑一天（静态结论置信度高，规则 10 要求实机）。
+1. ~~写盘同步性~~ **✅ 已实证（2026-10-31，docs/2026-10-31-锚点实证.md）**：`SaveGameFileCore` 内部 `TemporaryFile.WritFileAsync` **未等待** + 外层 BeginBatchSave/EndBatchSave 再延迟一层 → postfix 仅作时机信号，字节复制必须等 mtime 稳定 + md5 双读重试（转正为必要路径）。
+2. ~~模式 gating~~ **✅ 已实证（同上）**：自然日翻转调用点（CostTime 内 day++ → TriggerDaySettlement → CaptureRebirthDaySnapshot）**无任何模式门控**；无尽共用 CountUpTimer（紧邻驱动 EndlessManager.OnHourChanged）。唯一门控 = 手机权限"跳过每日结算"（C2S_Permissions.IsSkipDailySettlement，仅挡调用点 A，不挡自然跨日）。**边界**：快照槽位设 0 时 Core 早退、postfix 空触发 → 字节源只在 NewestSnapPath mtime ≤120s 时采用，否则跳过+trace。
+3. **snap 独立可读性实机**：复制 snap → 改新名 → `AddHistoryEntry` → 实机读档进游戏跑一天（静态结论置信度高，规则 10 要求实机）。→ Task 2 探针。
 
 ## 7. 风险与红线
 
