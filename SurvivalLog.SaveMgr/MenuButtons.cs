@@ -167,6 +167,8 @@ internal static class MenuButtons
     {
         try
         {
+            SaveListPanel.RefreshCache();                         // 主菜单期刷新列表快照（局内读档用）
+
             var web = GetWebView();
             if (web == null) return;
 
