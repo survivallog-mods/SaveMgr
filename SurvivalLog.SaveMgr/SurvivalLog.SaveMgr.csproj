@@ -4,8 +4,8 @@
     <TargetFramework>net6.0</TargetFramework>
     <AssemblyName>SurvivalLog.SaveMgr</AssemblyName>
     <RootNamespace>SurvivalLog.SaveMgr</RootNamespace>
-    <!-- 版本号由作者定（硬规则1）；0.0.0 为脚手架占位，release.ps1 校验与 Plugin.cs Version 一致 -->
-    <Version>0.0.0</Version>
+    <!-- 版本号由作者定（硬规则1）：1.0.0 = 2026-11-01 作者拍板首发 -->
+    <Version>1.0.0</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <DebugType>embedded</DebugType>

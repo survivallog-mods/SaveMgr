@@ -14,7 +14,7 @@ public sealed class SaveMgrPlugin : BasePlugin
 {
     public const string Guid = "com.local.survivallog.savemgr";
     public const string Name = "SaveMgr";
-    public const string Version = "0.0.0"; // 占位：版本号由作者定（硬规则1），release.ps1 校验与本串一致
+    public const string Version = "1.0.0"; // 作者定号：2026-11-01 首发
 
     internal static ManualLogSource Log;
     internal static ConfigEntry<bool> Enabled;
