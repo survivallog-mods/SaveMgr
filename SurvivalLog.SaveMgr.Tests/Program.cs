@@ -252,11 +252,24 @@ internal static class BackupServiceTests
             svc5.Tick();                                  // 落盘 → 补上
             check(before == 0 && st5.ListBackups("Save_t").Count == 1, "Tick_PicksUp_LatePersist");
 
-            // 手动：直接抄主档，Source=manual
+            // 手动（按钮路径）：先强制持久化→Tick 抄→回调；Source=manual 且不写 lastAutoDay
             var (svc6, st6, _, _) = Fixture(() => 3, () => 49);
-            var dir = svc6.ManualBackup();
-            var m = dir == null ? null : st6.ReadMeta(dir);
-            check(m != null && m.Source == "manual" && m.Day == 49, "ManualBackup_Copies_Main");
+            int doneDay = -99; string doneDir = null;
+            svc6.OnManualDone += (d, x) => { doneDay = d; doneDir = x; };
+            svc6.ManualBackupNow();
+            svc6.Tick();
+            var m = doneDir == null ? null : st6.ReadMeta(doneDir);
+            check(doneDay == 49 && m != null && m.Source == "manual" && m.Day == 49
+                  && st6.ReadLastAutoDay("Save_t") == null, "ManualBackupNow_Persists_Then_Copies");
+
+            // 手动失败路径（无持久化落盘）→ day=-1 + 原因
+            var (svc7, st7, _, _) = Fixture(() => 3, () => 49, autoPersist: false, persistMs: 60);
+            int failDay = 99; string failWhy = null;
+            svc7.OnManualDone += (d, x) => { failDay = d; failWhy = x; };
+            svc7.ManualBackupNow();
+            System.Threading.Thread.Sleep(120);
+            svc7.Tick();
+            check(failDay == -1 && failWhy != null && st7.ListBackups("Save_t").Count == 0, "ManualBackupNow_Fails_WhenPersistTimesOut");
         }
         finally
         {

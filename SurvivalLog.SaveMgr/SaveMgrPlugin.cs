@@ -36,6 +36,10 @@ public sealed class SaveMgrPlugin : BasePlugin
             new ConfigDescription("每档备份保留上限（按天数升序删最老，含手动）", new AcceptableValueRange<int>(1, 999)));
 
         Service = BuildService();
+        Service.OnManualDone += (day, dirOrReason) =>
+            MenuButtons.Toast("OutSetting", day >= 0
+                ? "已存档 · " + System.IO.Path.GetFileName(dirOrReason)
+                : "存档失败：" + dirOrReason);
         // 游戏内实体按钮层（主菜单「一键回档」/局内 ESC「立即存档」）由 Ticker 驱动，见 MenuButtons
         InstallPatches();                     // 逐类隔离挂载（EndlessGuard 实证模式：坏一个不连坐）
         TickerHost.Install();

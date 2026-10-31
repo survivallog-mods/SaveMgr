@@ -15,6 +15,7 @@ public sealed class BackupService
     private sealed class PendingAuto
     {
         public int Day;
+        public string Source;        // "auto" | "manual"（按钮/F9 同路径：先强制持久化再抄）
         public string SaveName;      // 武装时刻捕获（Tick 不再重读——终审：防结算窗口切档串档）
         public string MainPath;
         public DateTime Mtime0;
@@ -64,7 +65,7 @@ public sealed class BackupService
 
             _pending = new PendingAuto
             {
-                Day = day,
+                Day = day, Source = "auto",
                 SaveName = saveName,
                 MainPath = main,
                 Mtime0 = File.GetLastWriteTime(main),
@@ -76,6 +77,33 @@ public sealed class BackupService
         catch (System.Exception e) { _trace("auto: " + e.Message); }
     }
 
+    /// <summary>手动「立即存档」（按钮/F9/cmd 同路径）：先强制持久化当前进度，落盘后抄走。
+    /// 与 OnSettlement 同一状态机（Tick 驱动非阻塞）；完成经 OnManualDone 回调（UI toast）。</summary>
+    public void ManualBackupNow()
+    {
+        try
+        {
+            var saveName = _saveName();
+            if (string.IsNullOrEmpty(saveName)) { _trace("manual: 无当前档名"); OnManualDone?.Invoke(-1, "无当前档"); return; }
+            var main = _mainPath();
+            if (string.IsNullOrEmpty(main) || !File.Exists(main)) { _trace("manual: 主档不存在"); OnManualDone?.Invoke(-1, "主档不存在"); return; }
+            _pending = new PendingAuto
+            {
+                Day = _currentDay(), Source = "manual",
+                SaveName = saveName,
+                MainPath = main,
+                Mtime0 = File.GetLastWriteTime(main),
+                DeadlineTick = System.Environment.TickCount + (int)_persistTimeout.TotalMilliseconds
+            };
+            _trace("manual: 请求游戏持久化（SaveGame）→ 落盘后抄");
+            _forcePersist?.Invoke();
+        }
+        catch (System.Exception e) { _trace("manual: " + e.Message); OnManualDone?.Invoke(-1, e.Message); }
+    }
+
+    /// <summary>手动存档完成回调：day≥0=成功（dir=备份目录）；day=-1=失败（第二参=原因）。</summary>
+    public event System.Action<int, string> OnManualDone;
+
     /// <summary>每 ticker 周期驱动：主档落盘（mtime 越过基线）即抄。非阻塞。</summary>
     public void Tick()
     {
@@ -85,40 +113,32 @@ public sealed class BackupService
         {
             if (System.Environment.TickCount - p.DeadlineTick > 0)
             {
-                _trace($"auto: 第{p.Day}天持久化超时未落盘，放弃（主档 mtime 未变化）");
+                _trace($"{p.Source}: 第{p.Day}天持久化超时未落盘，放弃（主档 mtime 未变化）");
                 _pending = null;
+                if (p.Source == "manual")
+                {
+                    try { OnManualDone?.Invoke(-1, "持久化超时"); }
+                    catch { }
+                }
                 return;
             }
             var mtime0 = p.Mtime0;
             if (!File.Exists(p.MainPath) || File.GetLastWriteTime(p.MainPath) <= mtime0) return;
 
             var saveName = p.SaveName;                            // 武装时刻捕获，防切档串档
-            var dir = _store.CreateBackup(p.MainPath, saveName, p.Day, "auto", $"第{p.Day}天", _gameBuild);
+            var dir = _store.CreateBackup(p.MainPath, saveName, p.Day, p.Source, (p.Source == "manual" ? "手动·" : "第") + p.Day + "天", _gameBuild);
             _pending = null;
-            if (dir == null) { _trace($"auto: 第{p.Day}天备份失败（源锁/写受阻）"); return; }
-            _store.WriteLastAutoDay(saveName, p.Day);
+            if (dir == null) { _trace($"{p.Source}: 第{p.Day}天备份失败（源锁/写受阻）"); return; }
+            if (p.Source == "auto") _store.WriteLastAutoDay(saveName, p.Day);
             var pruned = _store.Prune(saveName, _keepPerSave());
-            _trace($"auto: 第{p.Day}天 → {Path.GetFileName(dir)}（清理 {pruned}）");
+            _trace($"{p.Source}: 第{p.Day}天 → {Path.GetFileName(dir)}（清理 {pruned}）");
+            if (p.Source == "manual")
+            {
+                try { OnManualDone?.Invoke(p.Day, dir); }
+                catch (System.Exception e) { _trace("manualDone: " + e.Message); }
+            }
         }
         catch (System.Exception e) { _trace("autoTick: " + e.Message); _pending = null; }
     }
 
-    /// <summary>手动备份：直接抄主档（新鲜度=最近一次持久化；自动备份的强制持久化不在此路径）。</summary>
-    public string ManualBackup()
-    {
-        try
-        {
-            var saveName = _saveName();
-            if (string.IsNullOrEmpty(saveName)) { _trace("manual: 无当前档名"); return null; }
-            var src = _mainPath();
-            if (string.IsNullOrEmpty(src) || !File.Exists(src)) { _trace("manual: 主档不存在"); return null; }
-            var day = _currentDay();
-            var dir = _store.CreateBackup(src, saveName, day, "manual", $"手动·第{day}天", _gameBuild);
-            if (dir == null) { _trace("manual: 备份失败"); return null; }
-            var pruned = _store.Prune(saveName, _keepPerSave());
-            _trace($"manual: 第{day}天 → {Path.GetFileName(dir)}（清理 {pruned}）");
-            return dir;
-        }
-        catch (System.Exception e) { _trace("manual: " + e.Message); return null; }
-    }
 }

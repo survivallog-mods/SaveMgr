@@ -3,14 +3,16 @@ using System.Text.Json;
 
 namespace SurvivalLog.SaveMgr;
 
-/// <summary>游戏内 HUD 实体按钮层（2026-10-31 作者两次拍板定案）：
-/// **只在局内 CoreUI1 HUD** 挂「立即存档」「读取存档」两键——主菜单不加按钮（官方已有读取存档）。
-/// - 立即存档 → ManualBackup + 页内 toast；
-/// - 读取存档 → Gsm.BattleToMain()（游戏自己的存档+回主菜单流程）→ MainUI 菜单渲染后
-///   自动点官方「读取存档」→ 官方存档列表弹出（回档=在官方列表里挑注入档，零自绘列表）。
+/// <summary>游戏内实体按钮层（2026-10-31 作者四次反馈定案）：**只在局内 ESC 暂停菜单（OutSetting）**
+/// 加两个官方样式菜单项——「立即存档」「读取存档」，插在「保存并退出」前。主菜单不加按钮；
+/// 不做 HUD 悬浮按钮（作者竖屏窗口实测找不到且挡画面）。
+/// - 立即存档 → BackupService.ManualBackupNow（先 SaveGame 强制持久化当前进度→落盘→抄，Tick 状态机
+///   非阻塞）→ 完成回调 toast；
+/// - 读取存档 → MainAction.Entrance.BattleToMain()（官方存档+回主菜单全流程）→ MainUI 渲染后
+///   自动点官方「读取存档」→ 官方存档列表弹出（回档=官方列表里挑注入档）。
 /// 机制照抄 ModCenter MenuEntryInjector 实证模式：Root MutationObserver + iframe load 钩幂等安装；
-/// 按钮 [data-interactive] 才能吃到 clickThrough 鼠标；点击只投 outbox，C# 2s 拍 drain，
-/// 动作主线程执行；__sm* 命名空间独立于 ModCenter 的 __mc*。</summary>
+/// [data-interactive] 才能吃到 clickThrough 鼠标；点击只投 outbox，C# 2s 拍 drain 主线程执行；
+/// __sm* 命名空间独立于 __mc*。</summary>
 internal static class MenuButtons
 {
     /// <summary>Root 引导脚本（幂等）。</summary>
@@ -40,28 +42,26 @@ internal static class MenuButtons
   }
   window.__smToast = toast;
 
-  function mkBtn(doc, text) {
-    var b = doc.createElement('button');
-    b.type = 'button';
-    b.setAttribute('data-interactive', '1');
-    b.textContent = text;
-    b.style.cssText = 'all:unset;box-sizing:border-box;cursor:pointer;display:block;width:96px;margin:0 0 8px 0;' +
-      'padding:7px 0;text-align:center;font-size:14px;letter-spacing:2px;color:#f2efe6;' +
-      'background:rgba(14,16,20,.72);border:1px solid rgba(242,239,230,.28);border-radius:8px;' +
-      'pointer-events:auto;';
-    return b;
-  }
-  function installHud(d) {
-    if (d.querySelector('.__sm_hud')) return;
-    var host = d.createElement('div');
-    host.className = '__sm_hud';
-    host.style.cssText = 'position:fixed;top:15%;right:10px;z-index:2147483646;pointer-events:none;';
-    var b1 = mkBtn(d, '立即存档');
-    b1.addEventListener('click', function () { window.__smOutbox.push('backup'); });
-    var b2 = mkBtn(d, '读取存档');
-    b2.addEventListener('click', function () { window.__smOutbox.push('loadsave'); });
-    host.appendChild(b1); host.appendChild(b2);
-    d.body.appendChild(host);
+  // ESC 暂停菜单：官方样式菜单项×2，插在「保存并退出」（.btn-restart/.btn-exit）前。
+  // 原型取锚点前一个兄弟（普通菜单项；cloneNode 不带事件监听，安全）；
+  // 绝不插进 .btn-restart + .btn-exit 相邻对之间（ModCenter ANCHORS 同规）。
+  function installEsc(d) {
+    var list = d.querySelector('.menu-list');
+    if (!list || list.querySelector('.__sm_entry')) return;
+    var anchor = list.querySelector('.btn-restart, .btn-exit');
+    if (!anchor) return;
+    var proto = anchor.previousElementSibling && !anchor.previousElementSibling.classList.contains('__sm_entry')
+      ? anchor.previousElementSibling : anchor;
+    ['立即存档', '读取存档'].forEach(function (label) {
+      var b = proto.cloneNode(true);
+      b.classList.add('__sm_entry');
+      b.setAttribute('data-interactive', '1');
+      b.textContent = label;
+      b.addEventListener('click', function () {
+        window.__smOutbox.push(label === '立即存档' ? 'backup' : 'loadsave');
+      });
+      list.insertBefore(b, anchor);
+    });
   }
   // 读取存档接力：BattleToMain 落回主菜单后自动点官方「读取存档」菜单项
   function autoOpenLoadList() {
@@ -78,7 +78,7 @@ internal static class MenuButtons
     }
   }
   function install() {
-    var c = docOf('CoreUI1'); if (c) installHud(c);
+    var b = docOf('OutSetting'); if (b) installEsc(b);
     autoOpenLoadList();
   }
   function hookLoads() {
@@ -92,8 +92,8 @@ internal static class MenuButtons
   }
   window.__smSelfCheck = function () {
     try {
-      var c = docOf('CoreUI1');
-      if (c && c.body && !c.querySelector('.__sm_hud')) return false;
+      var b = docOf('OutSetting');
+      if (b && b.querySelector('.menu-list') && !b.querySelector('.__sm_entry')) return false;
       return true;
     } catch (e) { return false; }
   };
@@ -143,21 +143,21 @@ internal static class MenuButtons
         {
             if (act == "backup")
             {
-                SaveMgrPlugin.Trace("按钮：立即存档");
-                var dir = SaveMgrPlugin.Service?.ManualBackup();
-                Toast("CoreUI1", dir != null ? "已存档 · " + System.IO.Path.GetFileName(dir) : "存档失败（详见 SaveMgr_trace）");
+                SaveMgrPlugin.Trace("按钮：立即存档（先持久化再抄）");
+                var svc = SaveMgrPlugin.Service;
+                if (svc == null) { Toast("OutSetting", "存档失败：服务未就绪"); return; }
+                svc.ManualBackupNow();                    // 完成/失败经 OnManualDone → toast（插件 Load 订阅）
             }
             else if (act == "loadsave")
             {
                 SaveMgrPlugin.Trace("按钮：读取存档 → 回主菜单 + 自动开官方列表");
-                // GameSaveManager.BattleToMain 只做存档侧（22:59 实机实证：主档写了、场景没切）；
-                // 场景切换在 GameEntrance.BattleToMain（MainAction.Entrance 持有，官方退出同款链路）
+                // GameSaveManager.BattleToMain 只做存档侧（实机实证）；场景切换在 GameEntrance.BattleToMain
                 var ma = GameCore.HotUpdate.BaseSingleton<GameCore.HotUpdate.MainAction>.Instance;
                 var entrance = ma == null ? null : ma.Entrance;
                 if (entrance == null)
                 {
                     SaveMgrPlugin.Trace("按钮：读取存档失败——MainAction.Entrance 未就绪");
-                    Toast("CoreUI1", "读取存档失败：场景入口未就绪");
+                    Toast("OutSetting", "读取存档失败：场景入口未就绪");
                     return;
                 }
                 ExecJs("window.__smAutoLoad = true;");

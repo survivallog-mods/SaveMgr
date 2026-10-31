@@ -79,7 +79,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
                 {
                     SaveMgrPlugin.Trace("cmd: manual");
                     var svc = SaveMgrPlugin.Service;
-                    if (svc != null) SaveMgrRuntime.Enqueue(() => svc.ManualBackup());
+                    if (svc != null) SaveMgrRuntime.Enqueue(() => svc.ManualBackupNow());
                 }
                 else if (cmd == "restore")
                 {
@@ -104,7 +104,7 @@ internal sealed class SaveMgrTicker : MonoBehaviour
             var svc = SaveMgrPlugin.Service;
             if (svc == null) { SaveMgrPlugin.Trace("F9: service 未就绪"); return; }
             SaveMgrPlugin.Trace("F9: 手动备份触发");
-            SaveMgrRuntime.Enqueue(() => svc.ManualBackup());
+            SaveMgrRuntime.Enqueue(() => svc.ManualBackupNow());
         }
         catch (Exception e) { SaveMgrPlugin.Trace("hotkey: " + e.Message); }
     }
