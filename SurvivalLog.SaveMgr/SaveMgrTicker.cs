@@ -60,7 +60,34 @@ internal sealed class SaveMgrTicker : MonoBehaviour
         SaveMgrRuntime.Drain();
         try { SaveMgrPlugin.Service?.Tick(); } catch (Exception e) { SaveMgrPlugin.Trace("svcTick: " + e.Message); }
         PollCmdFile();
+        PollActionBits();
         DayWatcher.Step();
+    }
+
+    /// <summary>面板动作位（ModCenter 写 cfg → 这里轮询执行 → 复位）。等价 F9/F10/cmd 通道。</summary>
+    private static void PollActionBits()
+    {
+        try
+        {
+            if (SaveMgrPlugin.BackupNow != null && SaveMgrPlugin.BackupNow.Value)
+            {
+                SaveMgrPlugin.BackupNow.Value = false;
+                SaveMgrPlugin.Trace("面板动作：立即备份");
+                var svc = SaveMgrPlugin.Service;
+                if (svc != null) SaveMgrRuntime.Enqueue(() => svc.ManualBackup());
+            }
+            if (SaveMgrPlugin.RestoreNow != null && SaveMgrPlugin.RestoreNow.Value)
+            {
+                SaveMgrPlugin.RestoreNow.Value = false;
+                SaveMgrPlugin.Trace("面板动作：一键回档");
+                SaveMgrRuntime.Enqueue(() =>
+                {
+                    var r = RestoreInjector.InjectLatest();
+                    SaveMgrPlugin.Trace("restore(面板): ok=" + r.Ok + " reason=" + r.Reason);
+                });
+            }
+        }
+        catch (Exception e) { SaveMgrPlugin.Trace("actionBits: " + e.Message); }
     }
 
     /// <summary>文件触发通道（本机调试用，等同热键）：plugins-data/SaveMgr/cmd.txt 每行一条

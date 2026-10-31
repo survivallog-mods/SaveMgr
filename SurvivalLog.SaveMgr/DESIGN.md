@@ -126,10 +126,12 @@ BepInEx/plugins-data/SaveMgr/
 |---|---|---|
 | Enabled | true | 总开关 |
 | AutoBackup | true | 结算自动存档 |
-| IntervalDays | 3 | 间隔天数（0=关，1=每天） |
+| IntervalDays | 5 | 间隔天数（0=关，1=每天；2026-10-31 作者定默认 5） |
 | ManualHotkey | F9 | 手动存档热键（主菜单/局内均可） |
 | KeepPerSave | 30 | 每档备份保留上限 |
 | RestoreEnabled | true | 一键回档（注入）开关 |
+| Action.BackupNow | false | 【面板动作位】true→执行一次手动备份→自动复位（ModCenter 按钮） |
+| Action.RestoreNow | false | 【面板动作位】true→主菜单一键回档→自动复位（ModCenter 按钮） |
 
 ## 6. 开工前实证清单（规则 12：不猜，实锤前不写实现）
 
@@ -150,7 +152,7 @@ BepInEx/plugins-data/SaveMgr/
 
 - [ ] `tools/push_modshared.ps1` 仓列表加 SaveMgr（第 13 仓）
 - [ ] suite `README.md` MOD 一览表加行
-- [ ] ModCenter 注册（`$suiteMods` 白名单 + 面板页签）
+- [x] ModCenter 注册（2026-10-31：Meta.cs 中文分组页含两个动作按钮「cfg 即 RPC」模式 + RepoDecision.RepoKeys 第 13 仓；实机验证面板点击→备份落地）
 - [ ] 安装器 [Files]/InstallDelete 名单
 - [ ] AGENTS.md 硬规则 15 的"12 个 mod 仓"口径更新（发版时）
 

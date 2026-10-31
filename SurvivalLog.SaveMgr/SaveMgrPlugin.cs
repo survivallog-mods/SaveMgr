@@ -25,6 +25,8 @@ public sealed class SaveMgrPlugin : BasePlugin
     internal static ConfigEntry<bool> RestoreEnabled;
     internal static ConfigEntry<bool> FallbackWatcher;
     internal static ConfigEntry<bool> CmdChannel;
+    internal static ConfigEntry<bool> BackupNow;   // 面板动作位（cfg 即 RPC）：true→执行一次手动备份→回 false
+    internal static ConfigEntry<bool> RestoreNow;  // 面板动作位：true→主菜单一键回档→回 false
 
     internal static BackupService Service;
 
@@ -33,13 +35,15 @@ public sealed class SaveMgrPlugin : BasePlugin
         Log = base.Log;
         Enabled = Config.Bind("General", "Enabled", true, "总开关：false=停全部功能（已落备份保留）");
         AutoBackup = Config.Bind("AutoBackup", "AutoBackup", true, "每日结算自动备份");
-        IntervalDays = Config.Bind("AutoBackup", "IntervalDays", 3, "间隔天数：0=关闭，1=每天，N=每 N 天");
+        IntervalDays = Config.Bind("AutoBackup", "IntervalDays", 5, "间隔天数：0=关闭，1=每天，N=每 N 天");
         ManualHotkey = Config.Bind("Manual", "ManualHotkey", "F9", "手动备份热键（UnityEngine.KeyCode 名）");
         KeepPerSave = Config.Bind("Manual", "KeepPerSave", 30,
             new ConfigDescription("每档备份保留上限（按天数升序删最老，含手动）", new AcceptableValueRange<int>(1, 999)));
         RestoreEnabled = Config.Bind("Restore", "RestoreEnabled", true, "一键回档（F10 主菜单注入最新备份）");
         FallbackWatcher = Config.Bind("AutoBackup", "FallbackWatcher", true, "兜底日翻检测（结算补丁静默失败时的保险）");
         CmdChannel = Config.Bind("Debug", "CmdChannel", true, "文件触发通道 plugins-data/SaveMgr/cmd.txt（manual/restore，本机自动化；关闭即禁）");
+        BackupNow = Config.Bind("Action", "BackupNow", false, "【动作】立即备份当前档（面板按钮；执行后自动复位）");
+        RestoreNow = Config.Bind("Action", "RestoreNow", false, "【动作】一键回档·注入最新备份为新档（需在主菜单；执行后自动复位）");
 
         Service = BuildService();
         InstallPatches();                     // 逐类隔离挂载（EndlessGuard 实证模式：坏一个不连坐）
