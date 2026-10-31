@@ -196,7 +196,8 @@ internal static class BackupServiceTests
             autoPersist ? (Action)(() => { seq++; WriteFresh(main, (byte)seq); }) : () => { },
             interval, () => 30, day, "26157732", _ => { },
             persistTimeout: persistMs.HasValue ? TimeSpan.FromMilliseconds(persistMs.Value) : TimeSpan.FromSeconds(15),
-            autoEnabled: () => autoEnabled);
+            autoEnabled: () => autoEnabled,
+            synchronous: true);
         return (svc, store, saves, main);
     }
 

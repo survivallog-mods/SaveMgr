@@ -74,7 +74,8 @@ public sealed class SaveMgrPlugin : BasePlugin
             },
             gameBuild: "26157732",
             trace: Trace,
-            autoEnabled: () => AutoBackup.Value);
+            autoEnabled: () => AutoBackup.Value,
+            toMainThread: SaveMgrRuntime.Enqueue);
     }
 
     /// <summary>逐类隔离挂载 Harmony 补丁（2026-10-25 教训：PatchAll 整包挂载时单个 IL 错炸整个 Load）。</summary>

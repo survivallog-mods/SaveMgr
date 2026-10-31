@@ -33,15 +33,18 @@ public sealed class BackupService
     private readonly string _gameBuild;
     private readonly Action<string> _trace;
     private readonly TimeSpan _persistTimeout;
+    private readonly bool _synchronous;   // 单测=同步执行抄档；实机=后台线程（主线程零 IO 卡顿）
+    private readonly System.Action<System.Action> _toMainThread;  // 后台完成回主线程（实机=SaveMgrRuntime.Enqueue；纯测=null 同步跑）
 
     private PendingAuto _pending;
 
     public BackupService(BackupStore store, Func<string> saveName, Func<string> mainPath,
         Action forcePersist, Func<int> intervalDays, Func<int> keepPerSave, Func<int> currentDay,
-        string gameBuild, Action<string> trace, TimeSpan? persistTimeout = null, Func<bool> autoEnabled = null)
+        string gameBuild, Action<string> trace, TimeSpan? persistTimeout = null, Func<bool> autoEnabled = null,
+        bool synchronous = false, System.Action<System.Action> toMainThread = null)
     {
         _store = store; _saveName = saveName; _mainPath = mainPath; _forcePersist = forcePersist;
-        _autoEnabled = autoEnabled;
+        _autoEnabled = autoEnabled; _synchronous = synchronous; _toMainThread = toMainThread;
         _intervalDays = intervalDays; _keepPerSave = keepPerSave; _currentDay = currentDay;
         _gameBuild = gameBuild; _trace = trace ?? (_ => { });
         _persistTimeout = persistTimeout ?? TimeSpan.FromSeconds(15);
@@ -126,17 +129,32 @@ public sealed class BackupService
             if (!File.Exists(p.MainPath) || File.GetLastWriteTime(p.MainPath) <= mtime0) return;
 
             var saveName = p.SaveName;                            // 武装时刻捕获，防切档串档
-            var dir = _store.CreateBackup(p.MainPath, saveName, p.Day, p.Source, (p.Source == "manual" ? "手动·" : "第") + p.Day + "天", _gameBuild);
-            _pending = null;
-            if (dir == null) { _trace($"{p.Source}: 第{p.Day}天备份失败（源锁/写受阻）"); return; }
-            if (p.Source == "auto") _store.WriteLastAutoDay(saveName, p.Day);
-            var pruned = _store.Prune(saveName, _keepPerSave());
-            _trace($"{p.Source}: 第{p.Day}天 → {Path.GetFileName(dir)}（清理 {pruned}）");
-            if (p.Source == "manual")
+            _pending = null;                                      // 先摘牌防重入（重活马上离场主线程）
+            var keep = _keepPerSave();
+            void Finish(string dir, int pruned)
             {
-                try { OnManualDone?.Invoke(p.Day, dir); }
-                catch (System.Exception e) { _trace("manualDone: " + e.Message); }
+                if (dir == null) { _trace($"{p.Source}: 第{p.Day}天备份失败（源锁/写受阻）"); }
+                else
+                {
+                    if (p.Source == "auto") _store.WriteLastAutoDay(saveName, p.Day);
+                    _trace($"{p.Source}: 第{p.Day}天 → {Path.GetFileName(dir)}（清理 {pruned}）");
+                }
+                if (p.Source == "manual")
+                {
+                    try { OnManualDone?.Invoke(dir == null ? -1 : p.Day, dir ?? "备份失败"); }
+                    catch (System.Exception e) { _trace("manualDone: " + e.Message); }
+                }
             }
+            void Work()                                           // 字节抄档+md5+清理：纯文件 IO
+            {
+                var dir = _store.CreateBackup(p.MainPath, saveName, p.Day, p.Source,
+                    (p.Source == "manual" ? "手动·" : "第") + p.Day + "天", _gameBuild);
+                var pruned = dir == null ? 0 : _store.Prune(saveName, keep);
+                if (_synchronous || _toMainThread == null) Finish(dir, pruned);
+                else _toMainThread(() => Finish(dir, pruned));
+            }
+            if (_synchronous) Work();
+            else System.Threading.Tasks.Task.Run(Work);           // 后台线程：主线程只留 mtime 判定
         }
         catch (System.Exception e) { _trace("autoTick: " + e.Message); _pending = null; }
     }

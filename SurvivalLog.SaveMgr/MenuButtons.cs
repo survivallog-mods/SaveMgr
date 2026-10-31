@@ -3,16 +3,15 @@ using System.Text.Json;
 
 namespace SurvivalLog.SaveMgr;
 
-/// <summary>游戏内实体按钮层（2026-10-31 作者四次反馈定案）：**只在局内 ESC 暂停菜单（OutSetting）**
-/// 加两个官方样式菜单项——「立即存档」「读取存档」，插在「保存并退出」前。主菜单不加按钮；
-/// 不做 HUD 悬浮按钮（作者竖屏窗口实测找不到且挡画面）。
-/// - 立即存档 → BackupService.ManualBackupNow（先 SaveGame 强制持久化当前进度→落盘→抄，Tick 状态机
-///   非阻塞）→ 完成回调 toast；
-/// - 读取存档 → MainAction.Entrance.BattleToMain()（官方存档+回主菜单全流程）→ MainUI 渲染后
-///   自动点官方「读取存档」→ 官方存档列表弹出（回档=官方列表里挑注入档）。
+/// <summary>游戏内实体按钮层（2026-11-01 作者定案终版）：局内 ESC 暂停菜单（OutSetting）两个官方样式
+/// 菜单项——「立即存档」「读取存档」。
+/// - 立即存档 → BackupService.ManualBackupNow（SaveGame 强制持久化当前进度→主档 mtime 越基线→
+///   **后台线程**字节级抄档（主线程零 IO 卡顿）→ 主线程回调 toast）；
+/// - 读取存档 → **原地弹出存档列表浮层**（官方风卡片，数据=Gsm.GetHistoryList 同原生过滤）→ 手点某档
+///   → 先存当前进度 → MainAction.Entrance.EnterBattle(fileName, isLoading:true)（官方读档 API 直切，
+///   不退主菜单）。
 /// 机制照抄 ModCenter MenuEntryInjector 实证模式：Root MutationObserver + iframe load 钩幂等安装；
-/// [data-interactive] 才能吃到 clickThrough 鼠标；点击只投 outbox，C# 2s 拍 drain 主线程执行；
-/// __sm* 命名空间独立于 __mc*。</summary>
+/// [data-interactive] 吃 clickThrough；点击只投 outbox，C# 2s 拍 drain 主线程执行。</summary>
 internal static class MenuButtons
 {
     /// <summary>Root 引导脚本（幂等）。</summary>
@@ -41,10 +40,23 @@ internal static class MenuButtons
     } catch (e) {}
   }
   window.__smToast = toast;
+  function fire(el) {
+    ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function (ev) {
+      el.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true }));
+    });
+  }
+  window.__smFire = fire;
+  function clickBackToGame() {
+    try {
+      var d = docOf('OutSetting');
+      var back = d && Array.from(d.querySelectorAll('.menu-list *')).filter(function (e) {
+        return e.childElementCount === 0 && e.textContent.trim() === '返回游戏';
+      })[0];
+      if (back) fire(back);
+    } catch (e) {}
+  }
 
   // ESC 暂停菜单：官方样式菜单项×2，插在「保存并退出」（.btn-restart/.btn-exit）前。
-  // 原型取锚点前一个兄弟（普通菜单项；cloneNode 不带事件监听，安全）；
-  // 绝不插进 .btn-restart + .btn-exit 相邻对之间（ModCenter ANCHORS 同规）。
   function installEsc(d) {
     var list = d.querySelector('.menu-list');
     if (!list || list.querySelector('.__sm_entry')) return;
@@ -58,40 +70,74 @@ internal static class MenuButtons
       b.setAttribute('data-interactive', '1');
       b.textContent = label;
       b.addEventListener('click', function () {
-        if (label === '立即存档') { window.__smOutbox.push('backup'); return; }
-        // 读取存档：先点官方「返回游戏」关暂停菜单（菜单开着会挡 BattleToMain 场景切换，
-        // 23:56 实机实证），稍等菜单收起再投递
-        try {
-          var d = docOf('OutSetting');
-          var back = d && Array.from(d.querySelectorAll('.menu-list *')).filter(function (e) {
-            return e.childElementCount === 0 && e.textContent.trim() === '返回游戏';
-          })[0];
-          if (back) ['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function (ev) {
-            back.dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true }));
-          });
-        } catch (e) {}
-        setTimeout(function () { window.__smOutbox.push('loadsave'); }, 400);
+        window.__smOutbox.push(label === '立即存档' ? 'backup' : 'loadsave');
       });
       list.insertBefore(b, anchor);
     });
   }
-  // 读取存档接力：BattleToMain 落回主菜单后自动点官方「读取存档」菜单项
-  function autoOpenLoadList() {
-    var d = docOf('MainUI');
-    if (!d || !window.__smAutoLoad) return;
-    var items = d.querySelectorAll('#app .container .menu .menu-item');
-    for (var i = 0; i < items.length; i++) {
-      var t = items[i].querySelector('.menu-text');
-      if (t && t.textContent.trim() === '读取存档') {
-        window.__smAutoLoad = false;
-        try { t.closest('.menu-item').click(); } catch (e) { t.click(); }
-        return;
-      }
+
+  // 存档列表浮层（暂停菜单之上；官方风卡片，手选读档）
+  window.__smShowList = function (rowsJson) {
+    var d = docOf('OutSetting');
+    if (!d || !d.body) return;
+    var old = d.getElementById('__sm_list');
+    if (old) old.remove();
+    var rows = [];
+    try { rows = JSON.parse(rowsJson); } catch (e) {}
+    var wrap = d.createElement('div');
+    wrap.id = '__sm_list';
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(8,10,13,.82);' +
+      'display:flex;flex-direction:column;align-items:center;justify-content:center;';
+    var card = d.createElement('div');
+    card.style.cssText = 'position:relative;width:min(86%,420px);max-height:76vh;overflow:auto;' +
+      'background:rgba(18,20,26,.97);border:1px solid rgba(242,239,230,.22);border-radius:14px;padding:14px;';
+    var title = d.createElement('div');
+    title.textContent = '存档列表 · 点击读取';
+    title.style.cssText = 'color:#f2efe6;font-size:16px;letter-spacing:3px;text-align:center;padding:4px 0 10px;';
+    card.appendChild(title);
+    var x = d.createElement('button');
+    x.type = 'button'; x.setAttribute('data-interactive', '1'); x.textContent = '×';
+    x.style.cssText = 'all:unset;cursor:pointer;position:absolute;top:8px;right:12px;color:#f2efe6;' +
+      'font-size:20px;padding:4px 10px;pointer-events:auto;';
+    x.addEventListener('click', function () { wrap.remove(); });
+    card.appendChild(x);
+    if (!rows.length) {
+      var empty = d.createElement('div');
+      empty.textContent = '没有可读取的存档';
+      empty.style.cssText = 'color:#9aa0a8;text-align:center;padding:18px 0;font-size:14px;';
+      card.appendChild(empty);
     }
-  }
+    rows.forEach(function (r) {
+      var it = d.createElement('button');
+      it.type = 'button';
+      it.setAttribute('data-interactive', '1');
+      it.style.cssText = 'all:unset;box-sizing:border-box;display:block;width:100%;cursor:pointer;' +
+        'margin:8px 0;padding:10px 14px;background:rgba(30,33,40,.9);' +
+        'border:1px solid rgba(242,239,230,.15);border-radius:10px;color:#f2efe6;' +
+        'text-align:left;pointer-events:auto;';
+      var l1 = d.createElement('div');
+      l1.textContent = '第 ' + r.d + ' 天 · ' + r.p;
+      l1.style.cssText = 'font-size:15px;letter-spacing:1px;';
+      var l2 = d.createElement('div');
+      l2.textContent = r.t;
+      l2.style.cssText = 'color:#9aa0a8;font-size:12px;margin-top:3px;letter-spacing:1px;';
+      it.appendChild(l1); it.appendChild(l2);
+      it.addEventListener('mouseenter', function () { it.style.background = 'rgba(48,52,62,.95)'; });
+      it.addEventListener('mouseleave', function () { it.style.background = 'rgba(30,33,40,.9)'; });
+      it.addEventListener('click', function () {
+        wrap.remove();
+        clickBackToGame();                                   // 收暂停菜单（防挡场景切换）
+        setTimeout(function () { window.__smOutbox.push('enter:' + r.f); }, 400);
+      });
+      card.appendChild(it);
+    });
+    wrap.appendChild(card);
+    wrap.addEventListener('click', function (e) { if (e.target === wrap) wrap.remove(); });
+    d.body.appendChild(wrap);
+  };
+
   function install() {
     var b = docOf('OutSetting'); if (b) installEsc(b);
-    autoOpenLoadList();
   }
   function hookLoads() {
     var fs = document.querySelectorAll('#iframe-container iframe');
@@ -116,7 +162,7 @@ internal static class MenuButtons
 })();
 ";
 
-    /// <summary>Ticker 2s 拍：守卫自愈（失守重发引导）→ drain outbox → 主线程执行动作 → toast 反馈。</summary>
+    /// <summary>Ticker 2s 拍：守卫自愈（失守重发引导）→ drain outbox → 主线程执行动作。</summary>
     internal static void Tick()
     {
         try
@@ -155,25 +201,20 @@ internal static class MenuButtons
         {
             if (act == "backup")
             {
-                SaveMgrPlugin.Trace("按钮：立即存档（先持久化再抄）");
+                SaveMgrPlugin.Trace("按钮：立即存档（先持久化，抄档在后台线程）");
                 var svc = SaveMgrPlugin.Service;
                 if (svc == null) { Toast("OutSetting", "存档失败：服务未就绪"); return; }
-                svc.ManualBackupNow();                    // 完成/失败经 OnManualDone → toast（插件 Load 订阅）
+                svc.ManualBackupNow();                    // 完成/失败经 OnManualDone → toast
             }
             else if (act == "loadsave")
             {
-                SaveMgrPlugin.Trace("按钮：读取存档 → 回主菜单 + 自动开官方列表");
-                // GameSaveManager.BattleToMain 只做存档侧（实机实证）；场景切换在 GameEntrance.BattleToMain
-                var ma = GameCore.HotUpdate.BaseSingleton<GameCore.HotUpdate.MainAction>.Instance;
-                var entrance = ma == null ? null : ma.Entrance;
-                if (entrance == null)
-                {
-                    SaveMgrPlugin.Trace("按钮：读取存档失败——MainAction.Entrance 未就绪");
-                    Toast("OutSetting", "读取存档失败：场景入口未就绪");
-                    return;
-                }
-                ExecJs("window.__smAutoLoad = true;");
-                entrance.BattleToMain();                  // 官方 存档+回主菜单 全流程
+                SaveMgrPlugin.Trace("按钮：读取存档 → 原地弹存档列表");
+                var json = SaveListPanel.BuildListJson();
+                ExecJs("window.__smShowList && window.__smShowList(" + json + ")");
+            }
+            else if (act != null && act.StartsWith("enter:", System.StringComparison.Ordinal))
+            {
+                SaveListPanel.EnterSave(act["enter:".Length..]);
             }
         }
         catch (Exception e) { SaveMgrPlugin.Trace("btnAct: " + e.Message); }
