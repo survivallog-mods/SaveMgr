@@ -16,6 +16,8 @@
     <!-- 纯逻辑文件直链（零游戏/BepInEx 依赖，可离线跑） -->
     <Compile Include="../SurvivalLog.SaveMgr/IntervalPolicy.cs" />
     <Compile Include="../SurvivalLog.SaveMgr/BackupMeta.cs" />
+    <Compile Include="../SurvivalLog.SaveMgr/BackupStore.cs" />
+    <Compile Include="../SurvivalLog.SaveMgr/SaveFiles.cs" />
   </ItemGroup>
 
 </Project>
