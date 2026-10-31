@@ -73,7 +73,7 @@ public static partial class RestoreInjector
             var name = SaveEnv.CurrentSaveBase();            // 备份目录按基名存（BackupService.saveName 口径）
             if (name == null) return (false, "no-current-save");
             var dataRoot = Path.Combine(BepInEx.Paths.BepInExRootPath, "plugins-data", "SaveMgr");
-            var store = new BackupStore(SaveEnv.SavesDir(), dataRoot);
+            var store = new BackupStore(dataRoot);
             var dir = store.LatestBackupDir(name);
             if (dir == null) return (false, "no-backup");
             var meta = store.ReadMeta(dir);

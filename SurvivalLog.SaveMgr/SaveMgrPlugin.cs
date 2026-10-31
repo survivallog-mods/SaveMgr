@@ -35,8 +35,8 @@ public sealed class SaveMgrPlugin : BasePlugin
         AutoBackup = Config.Bind("AutoBackup", "AutoBackup", true, "每日结算自动备份");
         IntervalDays = Config.Bind("AutoBackup", "IntervalDays", 3, "间隔天数：0=关闭，1=每天，N=每 N 天");
         ManualHotkey = Config.Bind("Manual", "ManualHotkey", "F9", "手动备份热键（UnityEngine.KeyCode 名）");
-        KeepPerSave = Config.Bind("Manual", "KeepPerSave", 30, "每档备份保留上限（按天数升序删最老，含手动）",
-            new ConfigAcceptableValueRange<int>(1, 999));
+        KeepPerSave = Config.Bind("Manual", "KeepPerSave", 30,
+            new ConfigDescription("每档备份保留上限（按天数升序删最老，含手动）", new AcceptableValueRange<int>(1, 999)));
         RestoreEnabled = Config.Bind("Restore", "RestoreEnabled", true, "一键回档（F10 主菜单注入最新备份）");
         FallbackWatcher = Config.Bind("AutoBackup", "FallbackWatcher", true, "兜底日翻检测（结算补丁静默失败时的保险）");
         CmdChannel = Config.Bind("Debug", "CmdChannel", true, "文件触发通道 plugins-data/SaveMgr/cmd.txt（manual/restore，本机自动化；关闭即禁）");
