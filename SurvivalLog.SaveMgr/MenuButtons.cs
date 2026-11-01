@@ -105,7 +105,7 @@ internal static class MenuButtons
 })();
 ";
 
-    private static readonly System.Collections.Generic.List<string> _pendingReg = new();
+    private static readonly System.Collections.Generic.List<PendingReg> _pendingReg = new();
     private static string _pendingRegPath;
     private static bool _lastReady;
     private static bool _saving;
@@ -130,7 +130,7 @@ internal static class MenuButtons
         catch (Exception e) { SaveMgrPlugin.Trace("btnTick: " + e.Message); }
     }
 
-    /// <summary>注册泵 + 就绪态：主菜单期补注册 pending 新档（AddHistoryEntry）；
+    /// <summary>注册泵 + 就绪态：主菜单期补注册 pending 新档（AddHistoryEntry + 无尽类型回填）；
     /// 战斗期推送 30s 保护期就绪态（按钮「准备中」→「立即存档」）。</summary>
     private static void TickSavepoint()
     {
@@ -138,13 +138,13 @@ internal static class MenuButtons
         {
             if (SaveEnv.AtMainMenu)
             {
-                string[] batch = null;
+                PendingReg[] batch = null;
                 lock (_pendingReg) { if (_pendingReg.Count > 0) { batch = _pendingReg.ToArray(); _pendingReg.Clear(); SavePendingReg(); } }
                 if (batch != null)
-                    foreach (var file in batch)
+                    foreach (var p in batch)
                     {
-                        var r = RestoreInjector.Register(file);
-                        SaveMgrPlugin.Trace("新档注册" + (r ? "成功 " + file : "跳过 " + file));
+                        var r = RestoreInjector.Register(p.File, p.Source);
+                        SaveMgrPlugin.Trace("新档注册" + (r ? "成功 " + p.File : "跳过 " + p.File));
                     }
             }
             var ready = SaveMgrPlugin.BattleReady();
@@ -178,7 +178,8 @@ internal static class MenuButtons
                 Toast("OutSetting", "存档失败：身份重写未成（详见 SaveMgr_trace）");
                 return;
             }
-            lock (_pendingReg) _pendingReg.Add(newFile);
+            var source = SaveEnv.CurrentSaveName();                     // 原档名：注册时无尽类型（无尽/剧情无尽）回填源
+            lock (_pendingReg) _pendingReg.Add(new PendingReg(newFile, source));
             SavePendingReg();
             SaveMgrPlugin.Trace("onNew: 新档就绪 " + newFile + "（主菜单时补注册进官方列表）");
             SaveDone();
@@ -193,15 +194,16 @@ internal static class MenuButtons
         ExecJs("window.__smSaveDone && window.__smSaveDone()");
     }
 
-    /// <summary>启动补扫：上次会话未注册的新档（崩溃/未到菜单）重新入册。</summary>
+    /// <summary>启动补扫：上次会话未注册的新档（崩溃/未到菜单）重新入册。
+    /// 旧版 pending.json（纯档名数组）兼容读入（source=null → 注册侧回落当前档名）。</summary>
     internal static void BootScanPending(string pendingPath)
     {
         try
         {
             _pendingRegPath = pendingPath;
             if (!System.IO.File.Exists(pendingPath)) return;
-            foreach (var f in JsonSerializer.Deserialize<string[]>(System.IO.File.ReadAllText(pendingPath)) ?? new string[0])
-                lock (_pendingReg) _pendingReg.Add(f);
+            foreach (var p in PendingReg.Deserialize(System.IO.File.ReadAllText(pendingPath)))
+                lock (_pendingReg) _pendingReg.Add(p);
             SaveMgrPlugin.Trace("bootScan: 补注册 " + _pendingReg.Count + " 个新档");
         }
         catch (Exception e) { SaveMgrPlugin.Trace("bootScan: " + e.Message); }
@@ -213,7 +215,7 @@ internal static class MenuButtons
         {
             if (_pendingRegPath == null) return;
             lock (_pendingReg)
-                System.IO.File.WriteAllText(_pendingRegPath, JsonSerializer.Serialize(_pendingReg.ToArray()));
+                System.IO.File.WriteAllText(_pendingRegPath, PendingReg.Serialize(_pendingReg.ToArray()));
         }
         catch { }
     }

@@ -20,6 +20,7 @@ internal static class Program
         IntervalPolicyTests.Run(Check);
         SavepointTests.Run(Check);
         RestoreInjectorTests.Run(Check);
+        PendingRegTests.Run(Check);
         Console.WriteLine(_fail == 0 ? "ALL GREEN" : $"FAILURES={_fail}");
         return _fail;
     }
@@ -188,5 +189,44 @@ internal static class RestoreInjectorTests
             check(fenceThrown, "ReadStable_Fence_Rejects_MidWriteChange");
         }
         finally { try { Directory.Delete(root, true); } catch { } }
+    }
+}
+
+internal static class PendingRegTests
+{
+    public static void Run(Action<bool, string> check)
+    {
+        // 往返：file+source 保留（无尽类型回填源随队列落盘）
+        var a = PendingReg.Serialize(new[] { new PendingReg("Save_1.bytes", "主档.bytes") });
+        var b = PendingReg.Deserialize(a);
+        check(b.Count == 1 && b[0].File == "Save_1.bytes" && b[0].Source == "主档.bytes",
+            "PendingReg_RoundTrip_KeepsFileAndSource");
+
+        // 旧格式兼容：纯 string[]（1.0.0 pending.json）→ source=null（注册侧回落当前档名）
+        var legacy = PendingReg.Deserialize("[\"Save_a.bytes\",\"Save_b.bytes\"]");
+        check(legacy.Count == 2 && legacy[0].File == "Save_a.bytes" && legacy[0].Source == null
+              && legacy[1].File == "Save_b.bytes" && legacy[1].Source == null,
+            "PendingReg_LegacyStringArray_SourceNull");
+
+        // 新旧混排（升级瞬间崩溃的最坏现场）
+        var mixed = PendingReg.Deserialize("[\"Save_a.bytes\",{\"f\":\"Save_b.bytes\",\"s\":\"x.bytes\"}]");
+        check(mixed.Count == 2 && mixed[0].Source == null && mixed[1].File == "Save_b.bytes" && mixed[1].Source == "x.bytes",
+            "PendingReg_MixedFormats_Tolerated");
+
+        // source=null 序列化省略 s，往返仍 null
+        var c = PendingReg.Serialize(new[] { new PendingReg("Save_2.bytes", null) });
+        check(!c.Contains("\"s\""), "PendingReg_NullSource_OmittedInJson");
+        check(PendingReg.Deserialize(c)[0].Source == null, "PendingReg_NullSource_RoundTrip");
+
+        // 空队列 / null 队列
+        check(PendingReg.Deserialize(PendingReg.Serialize(new PendingReg[0])).Count == 0, "PendingReg_EmptyRoundTrip");
+        check(PendingReg.Deserialize(PendingReg.Serialize(null)).Count == 0, "PendingReg_NullList_SerializesEmpty");
+
+        // 坏 JSON / 空 / 非数组根 / 缺 f 的对象 → 空表或跳过，不抛
+        check(PendingReg.Deserialize(null).Count == 0, "PendingReg_NullJson_Empty");
+        check(PendingReg.Deserialize("").Count == 0, "PendingReg_EmptyJson_Empty");
+        check(PendingReg.Deserialize("garbage{").Count == 0, "PendingReg_BadJson_Empty");
+        check(PendingReg.Deserialize("{\"f\":\"x\"}").Count == 0, "PendingReg_NonArrayRoot_Empty");
+        check(PendingReg.Deserialize("[{\"s\":\"only_source\"}]").Count == 0, "PendingReg_ObjectWithoutFile_Skipped");
     }
 }

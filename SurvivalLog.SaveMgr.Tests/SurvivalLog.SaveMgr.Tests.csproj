@@ -18,6 +18,7 @@
     <Compile Include="../SurvivalLog.SaveMgr/BackupStore.cs" />
     <Compile Include="../SurvivalLog.SaveMgr/SavepointService.cs" />
     <Compile Include="../SurvivalLog.SaveMgr/RestoreInjector.cs" />
+    <Compile Include="../SurvivalLog.SaveMgr/PendingReg.cs" />
   </ItemGroup>
 
 </Project>
