@@ -4,8 +4,8 @@
     <TargetFramework>net6.0</TargetFramework>
     <AssemblyName>SurvivalLog.SaveMgr</AssemblyName>
     <RootNamespace>SurvivalLog.SaveMgr</RootNamespace>
-    <!-- 版本号由作者定（硬规则1）：1.0.0 = 2026-11-01 作者拍板首发 -->
-    <Version>1.0.0</Version>
+  <!-- 版本号由作者定（硬规则1）：1.0.0 = 2026-11-01 作者拍板首发；1.0.1 = 存档点无尽类型标签回填 -->
+  <Version>1.0.1</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <DebugType>embedded</DebugType>
