@@ -14,7 +14,7 @@ public sealed class SaveMgrPlugin : BasePlugin
 {
     public const string Guid = "com.local.survivallog.savemgr";
     public const string Name = "SaveMgr";
-    public const string Version = "1.0.1"; // 作者定号：1.0.0=2026-11-01 首发；1.0.1=存档点无尽类型标签回填
+    public const string Version = "1.0.2"; // 作者定号：1.0.0=2026-11-01 首发；1.0.1=存档点无尽类型标签回填；1.0.2=接套件防盗署名气泡
 
     internal static ManualLogSource Log;
     internal static ConfigEntry<bool> Enabled;
@@ -81,6 +81,7 @@ public sealed class SaveMgrPlugin : BasePlugin
 
         Trace("loaded：服务+结算钩子+Ticker 接线（回档 Task 8 接入）");
         Log.LogInfo("[SaveMgr] 存档管理 loaded（interval=" + IntervalDays.Value + "）");
+        SurvivalLog.ModShared.WelcomeTip.Install(Log);
     }
 
     private static string dataRoot2() => Path.Combine(Paths.BepInExRootPath, "plugins-data", "SaveMgr");
